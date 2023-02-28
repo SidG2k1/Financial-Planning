@@ -66,13 +66,22 @@ retirement_nw = nw
 cash_case = nw
 age_to_nw = {}
 age_to_all_cash_portfolio = {}
+
+one_time_expenses = {
+    28: 50, # Marriage
+    32: 300, # Down payment on house
+}
+for i in range(25, 70, 5): one_time_expenses[i] = 40 # Car
+
 for curr_age in range(age, expected_lifespan + 1):
     # Since all math is done in current dollar terms, we need to adjust for inflation
+    inc = post_tax(realized_income[curr_age - age])
+    exp = expenses[curr_age - age]
+    if curr_age in one_time_expenses: exp += one_time_expenses[curr_age]
+
     market_return = real_mkt_return()
     retirement_nw = retirement_nw * market_return
-    inc = post_tax(realized_income[curr_age - age])
     retirement_nw += inc
-    exp = expenses[curr_age - age]
     retirement_nw -= exp
 
     cash_case = cash_case + inc - exp
