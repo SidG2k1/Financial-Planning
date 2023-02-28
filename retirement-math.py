@@ -1,15 +1,217 @@
 # All numbers in present dollar terms, 1 unit = $1000 (2023 USD)
 
+from numpy import random
+import numpy as np
+from typing import List
+
+seed = np.random.randint(0, 1000000)
+year = 2023
+
 def real_mkt_return():
-    import numpy as np
+    """
+    This function will return the real market return
+    """
+    # Assume 3.5% real return with 10% volatility
+    # use seed + year to make sure the same return is used for the same year
+    np.random.seed(seed + year)
     return 1 + np.random.normal(0.035, 0.1)
 
+class Portfolio():
+    """
+    This is a parent class for all portfolios
+    """
+    def __init__(self):
+        pass
 
-def product(iterable):
-    res = 1
-    for i in iterable:
-        res *= i
-    return res
+    def pass_year(self):
+        """
+        This function will pass a year and make decisions
+        """
+        pass
+
+    def get_nw(self):
+        """
+        This function will return the net worth of the portfolio
+        """
+        pass
+
+    def get_nw_history(self):
+        """
+        This function will return the net worth history of the portfolio
+        """
+        pass
+
+    def remove_money(self, amount):
+        """
+        This function will remove money from the portfolio
+        """
+        pass
+
+    def add_money(self, amount):
+        """
+        This function will add money to the portfolio
+        """
+        pass
+
+class PortfolioManager():
+    """
+    This class will manage the portfolios and make decisions
+    """
+    def __init__(self, portfolios: List[Portfolio]):
+        self.portfolios = portfolios
+    
+    def pass_year(self):
+        """
+        This function will pass a year and make decisions
+        """
+        for portfolio in self.portfolios:
+            portfolio.pass_year()
+    
+    def get_nw(self):
+        """
+        This function will return the net worth of all the portfolios
+        """
+        # Return the class name and the net worth
+        return [(type(portfolio).__name__, portfolio.get_nw()) for portfolio in self.portfolios]
+    
+    def get_nw_history(self):
+        """
+        This function will return the net worth history of all the portfolios
+        """
+        return [portfolio.get_nw_history() for portfolio in self.portfolios]
+    
+    def remove_money(self, amount):
+        """
+        This function will remove money from the portfolios
+        """
+        for portfolio in self.portfolios:
+            portfolio.remove_money(amount)
+
+    def add_money(self, amount):
+        """
+        This function will add money to the portfolios
+        """
+        for portfolio in self.portfolios:
+            portfolio.add_money(amount)
+
+class CashPortfolio(Portfolio):
+    """
+    This class will represent a cash portfolio
+    """
+    def __init__(self, init_nw):
+        self.nw = init_nw
+        self.nw_history = [init_nw]
+    
+    def pass_year(self):
+        """
+        This function will pass a year and make decisions
+        """
+        self.nw /= 1.02 # Assume 2% inflation
+        self.nw_history.append(self.nw)
+    
+    def get_nw(self):
+        """
+        This function will return the net worth of the portfolio
+        """
+        return self.nw
+    
+    def get_nw_history(self):
+        """
+        This function will return the net worth history of the portfolio
+        """
+        return self.nw_history
+    
+    def remove_money(self, amount):
+        """
+        This function will remove money from the portfolio
+        """
+        self.nw -= amount
+
+    def add_money(self, amount):
+        """
+        This function will add money to the portfolio
+        """
+        self.nw += amount
+
+class StockPortfolio(Portfolio):
+    """
+    This class will represent a stock portfolio
+    """
+    def __init__(self, init_nw):
+        self.nw = init_nw
+        self.nw_history = [init_nw]
+
+    def pass_year(self):
+        """
+        This function will pass a year and make decisions
+        """
+        self.nw *= real_mkt_return()
+        self.nw_history.append(self.nw)
+    
+    def get_nw(self):
+        """
+        This function will return the net worth of the portfolio
+        """
+        return self.nw
+
+    def get_nw_history(self):
+        """
+        This function will return the net worth history of the portfolio
+        """
+        return self.nw_history
+
+    def remove_money(self, amount):
+        """
+        This function will remove money from the portfolio
+        """
+        self.nw -= amount
+    
+    def add_money(self, amount):
+        """
+        This function will add money to the portfolio
+        """
+        self.nw += amount
+
+class LeveragedStockPortfolio(Portfolio):
+    """
+    This class will represent a leveraged stock portfolio
+    """
+    def __init__(self, init_nw, init_leverage):
+        self.nw = init_nw
+        self.nw_history = [init_nw]
+        self.leverage = init_leverage
+
+    def pass_year(self):
+        """
+        This function will pass a year and make decisions
+        """
+        fees = (self.leverage - 1) * 0.02
+        self.nw *= ((real_mkt_return() - 1) * self.leverage + 1) - fees
+        self.nw_history.append(self.nw)
+
+    def get_nw(self):
+        """
+        This function will return the net worth of the portfolio
+        """
+        return self.nw
+
+    def get_nw_history(self):
+        """
+        This function will return the net worth history of the portfolio
+        """
+        return self.nw_history
+
+    def remove_money(self, amount):
+        """
+        This function will remove money from the portfolio
+        """
+        self.nw -= amount
+
+    def add_money(self, amount):
+        """
+        This function will add money to the portfolio
+        """
+        self.nw += amount
 
 def post_tax(income):
     income *= 1000
@@ -62,10 +264,11 @@ init_exp = 60
 expenses = [init_exp * lifestyle_inflation**i for i in range(200)]
 realized_income = income[:1 + ret_age - age] + [0] * (expected_lifespan - ret_age)
 
-retirement_nw = nw
-cash_case = nw
-age_to_nw = {}
-age_to_all_cash_portfolio = {}
+portfolios = PortfolioManager([
+    CashPortfolio(nw),
+    StockPortfolio(nw),
+    LeveragedStockPortfolio(nw, init_leverage=2),
+])
 
 one_time_expenses = {
     28: 50, # Marriage
@@ -79,34 +282,31 @@ for curr_age in range(age, expected_lifespan + 1):
     exp = expenses[curr_age - age]
     if curr_age in one_time_expenses: exp += one_time_expenses[curr_age]
 
-    market_return = real_mkt_return()
-    retirement_nw = retirement_nw * market_return
-    retirement_nw += inc
-    retirement_nw -= exp
-
-    cash_case = cash_case + inc - exp
-    cash_case /= 1.02 # real return of -2% on cash portfolio due to inflation
+    # Update the portfolio
+    portfolios.pass_year()
+    portfolios.remove_money(exp)
+    portfolios.add_money(inc)
 
     print('age: ', curr_age, end=';\t')
     # format the numbers
-    print('market_return: ', '{:.2%}'.format((market_return - 1)), end=';\t')
     print('post-tax income: ', format_money(inc), end=';\t')
     print('expenses: ', format_money(exp), end=';\t')
-    print('nw: ', format_money(retirement_nw))
+    print('nw: ', portfolios.get_nw())
+    year += 1
 
-    # These will later be used to plot the net worth over time in millions of dollars
-    age_to_nw[curr_age] = retirement_nw / 1000
-    age_to_all_cash_portfolio[curr_age] = cash_case / 1000
-
-# exit()
 import matplotlib.pyplot as plt
-plt.plot(list(age_to_nw.keys()), list(age_to_nw.values()))
-plt.plot(list(age_to_all_cash_portfolio.keys()), list(age_to_all_cash_portfolio.values()))
-plt.title('Net Worth Over Time')
+# Plot the net worth history of each portfolio over time (in millions)
+#   Use the legend to label each portfolio using the class name
+nw_history = [portfolio.get_nw_history() for portfolio in portfolios.portfolios]
+# normalize the net worth history (shift up index by age): turn to dict
+nw_history = {i + age - 2: [nw_history[j][i] / 1000 for j in range(len(nw_history))] for i in range(len(nw_history[0]))}
+# plot the net worth history
+plt.plot(list(nw_history.keys()), list(nw_history.values()))
+# Add a legend
+plt.legend([type(portfolio).__name__ for portfolio in portfolios.portfolios])
+# Add labels to the axes
 plt.xlabel('Age')
-plt.ylabel('Net Worth (M$)')
-plt.grid()
-plt.legend(['Investment Portfolio', 'All-Cash Portfolio'])
+plt.ylabel('Net Worth ($M)')
 # Show fat red line at retirement age and 0 net worth
 plt.axvline(x=ret_age, color='r', linestyle='--')
 plt.axhline(y=0, color='r', linestyle='--')
