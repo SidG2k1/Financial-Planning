@@ -2,4 +2,4 @@
 
 A financial simulator for personal finance planning.
 
-Heavily inspired by the principles on Ben Felix.
+Heavily inspired by the principles of Ben Felix.
