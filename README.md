@@ -1,2 +1,5 @@
 # Financial-Planning
-A financial simulator for personal finance planning
+
+A financial simulator for personal finance planning.
+
+Heavily inspired by the principles on Ben Felix.
