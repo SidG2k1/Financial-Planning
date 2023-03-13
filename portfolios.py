@@ -25,14 +25,22 @@ def normal(mean, std):
     res = res * std + mean
     return res
 
-
 def global_stocks_return():
     """
     This function will return the real market return
     """
-    mean_return = 3.5
-    return normal(1 + mean_return / 100, 0.1)
+    mean_return = 5
+    return normal(1 + mean_return / 100, 0.11)
 
+def global_bonds_return():
+    """
+    Bonds should have positive yield, yet be negatively correlated to stocks
+
+    Think about if the formulation below makes sense
+    """
+    stock_return_quality = normal(0, 0.14)
+    bond_yield = 1.02 - stock_return_quality / 10
+    return max(1.0025, bond_yield)
 
 class Portfolio():
     """
@@ -170,7 +178,10 @@ class StockPortfolio(Portfolio):
         """
         This function will pass a year and make decisions
         """
-        self.nw *= global_stocks_return()
+        if self.nw > 0:
+            self.nw *= global_stocks_return()
+        else:
+            self.nw *= 1.04 # debt interest
         self.nw_history.append(self.nw)
 
     def get_nw(self):
@@ -212,8 +223,12 @@ class LeveragedStockPortfolio(Portfolio):
         """
         This function will pass a year and make decisions
         """
+        # 2% fee per leverage
         fees = (self.leverage - 1) * 0.02
-        self.nw *= ((global_stocks_return() - 1) * self.leverage + 1) - fees
+        if self.nw > 0:
+            self.nw *= ((global_stocks_return() - 1) * self.leverage + 1) - fees
+        else:
+            self.nw *= 1.04 # debt interest
         self.nw_history.append(self.nw)
 
     def get_nw(self):
@@ -337,15 +352,16 @@ class TemporalHybridPortfolio(Portfolio):
         # Sort by years
         portfolios, years = zip(
             *sorted(zip(portfolios, years), key=lambda x: x[1]))
+        
         self.portfolios = list(portfolios)
+        self.years = list(years)
         self.nw = init_nw
         self.nw_history = [init_nw]
-        self.current_portfolio = 0
-        self.years = list(years)
         # add a cash portfolio at the end of time
         self.portfolios.append(CashPortfolio(0))
         self.years.append(1000000000)
-        # track year with the global year variable
+
+        self.current_portfolio = 0
 
     def pass_year(self):
         """
@@ -353,16 +369,20 @@ class TemporalHybridPortfolio(Portfolio):
         """
         # If we've passed the year, switch to the next portfolio
         if year >= self.years[self.current_portfolio + 1]:
-            self.current_portfolio += 1
+            # Time to switch!!
             # Move the money from the current portfolio to the next portfolio
-            self.portfolios[self.current_portfolio].add_money(
-                self.portfolios[self.current_portfolio - 1].get_nw())
-            self.portfolios[self.current_portfolio - 1].remove_money(
-                self.portfolios[self.current_portfolio - 1].get_nw())
+            self.portfolios[self.current_portfolio + 1].add_money(
+                self.portfolios[self.current_portfolio].get_nw())
+            
+            self.portfolios[self.current_portfolio].remove_money(
+                self.portfolios[self.current_portfolio].get_nw())
+            
+            self.portfolios[self.current_portfolio].nw = 0
+            self.current_portfolio += 1
         # Pass the year for the current portfolio
         self.portfolios[self.current_portfolio].pass_year()
         # Update the net worth
-        self.nw = sum([portfolio.get_nw() for portfolio in self.portfolios])
+        self.nw = self.portfolios[self.current_portfolio].get_nw()
         self.nw_history.append(self.nw)
 
     def get_nw(self):

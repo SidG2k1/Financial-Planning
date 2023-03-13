@@ -8,25 +8,37 @@ def format_money(val):
     # * 1000 to convert to $1000 units, add commas, and add $
     return '$' + '{:,}'.format(int(val * 1000))
 
-simulations = 1000
-age = 22
+mode = "plot"
+mode = "stat"
+simulations = 0
+if mode == 'stat':
+    target_run_dur_secs = 3
+    simulations = target_run_dur_secs * 10000 // 20
+else:
+    simulations = 5
+
+age = 50
 ret_age = 60
 expected_lifespan = 100
-lifestyle_inflation = 1.01
-nw = 40
+lifestyle_inflation = 1.00
+nw = 2500 #k
 
-mean_case = [230] * 3 + [260] * 3 + [400] * 4 + [550] * 200
-optimistic_case = [450] * 3 + [550] * 3 + [700] * 5 + [850] * 200
-pessimistic_case = [170] * 4 + [200] * 3 + [240] * 5 + [260] * 200
+# mean_case = [230] * 3 + [260] * 3 + [400] * 4 + [550] * 200
+# optimistic_case = [450] + [350] * 4 + [450] * 3 + [600] * 6 + [800] * 100
+mean_case = [400] * 1000
 income = mean_case
+
 realized_income = income[:1 + ret_age - age] + \
     [0] * (expected_lifespan - ret_age)
 
-init_exp = 60
+init_exp = 120
 expenses = [init_exp * lifestyle_inflation**i for i in range(200)]
+
+# expenses = [60] * 10 + [60 + 30] * 20 + [60] * 10 + [40] * 100 # Child
 
 
 start_time = curr_time()
+
 def run_sim():
     reset_seed()
     set_year(2023)
@@ -53,7 +65,7 @@ def run_sim():
         med_high_risk_portfolio,
         medium_risk_portfolio,
         low_risk_portfolio,
-        # transition_portfolios, # Note this has a bug
+        transition_portfolios, # Note this has a bug
     ])
 
     one_time_expenses = {
@@ -63,6 +75,7 @@ def run_sim():
         one_time_expenses[i] = 40  # Car
 
     total_history = []
+    for p in portfolios.portfolios: p.add_money(nw)
     for curr_age in range(age, expected_lifespan + 1):
         # Since all math is done in current dollar terms, we need to adjust for inflation
         inc = post_income_tax(realized_income[curr_age - age])
@@ -80,10 +93,11 @@ def run_sim():
     return total_history, portfolios
 
 import matplotlib.pyplot as plt
-mode = "plot"
-mode = "stat"
 
 all_runs = [] # list of clarified data
+
+if mode == 'plot':
+    simulations = 5
 
 for i in range(simulations):
     total_history, portfolios = run_sim()
@@ -134,6 +148,8 @@ if mode == 'stat':
         ...
     """
 
+    # TODO: Consider head-to-heads (how often does portfolio X beat Y)
+
     # {"type": {"metric": data}}
     type_to_agg = {}
     for type, nw_traj in type_to_end_nw.items():
@@ -142,10 +158,35 @@ if mode == 'stat':
 
         # Pct neg
         pct_neg = len(list(filter(lambda x: x < 0, nw_traj))) / len(nw_traj)
-        type_to_agg[type]["Percent Negative Ending"] = str(int(pct_neg * 100)) + "%"
+        type_to_agg[type]["Success (Positive) Rate"] = str(100 - int(pct_neg * 100)) + "%"
 
         # Average
         type_to_agg[type]["Average Ending NW"] = str(int(10 * sum(nw_traj) / len(nw_traj)) / 10) + 'M'
+
+        """
+        for port_name, nw_data in clarified.items():
+            plt.plot(nw_data[0], nw_data[1])
+            legend.append(port_name)
+        plt.legend(legend)
+
+        # Add labels to the axes
+        plt.xlabel('Age')
+        plt.ylabel('Net Worth ($M)')
+        # Show fat red line at retirement age and 0 net worth
+        plt.axvline(x=ret_age, color='r', linestyle='--')
+        plt.axhline(y=0, color='r', linestyle='--')
+        plt.show()
+        """
+        import numpy as np
+        pctiles = [i for i in range(0, 99)]
+        plt.plot(pctiles, np.percentile(nw_traj, pctiles))
+        # plt.plot(sorted(nw_traj))
+        plt.legend([type])
+        plt.xlabel("Percentile")
+        plt.ylabel("NW")
+        plt.axhline(y=0, color='r', linestyle='--')
+        plt.show()
+
 
         # next agg
         continue
