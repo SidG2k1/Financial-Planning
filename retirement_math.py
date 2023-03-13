@@ -17,25 +17,24 @@ if mode == 'stat':
 else:
     simulations = 5
 
-age = 50
+age = 22
 ret_age = 60
 expected_lifespan = 100
-lifestyle_inflation = 1.00
-nw = 2500 #k
+lifestyle_inflation = 1.01
+nw = 50
 
-# mean_case = [230] * 3 + [260] * 3 + [400] * 4 + [550] * 200
+mean_case = [230] * 3 + [260] * 3 + [400] * 4 + [550] * 200
 # optimistic_case = [450] + [350] * 4 + [450] * 3 + [600] * 6 + [800] * 100
-mean_case = [400] * 1000
 income = mean_case
 
 realized_income = income[:1 + ret_age - age] + \
     [0] * (expected_lifespan - ret_age)
 
-init_exp = 120
+init_exp = 60
 expenses = [init_exp * lifestyle_inflation**i for i in range(200)]
 
-# expenses = [60] * 10 + [60 + 30] * 20 + [60] * 10 + [40] * 100 # Child
-
+expenses = [60] * 10 + [60 + 30] * 20 + [60] * 10 + [40] * 100
+#           new grad,   child,          post-child,  retirement
 
 start_time = curr_time()
 
