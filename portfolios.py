@@ -29,8 +29,8 @@ def global_stocks_return():
     """
     This function will return the real market return
     """
-    mean_return = 5
-    return normal(1 + mean_return / 100, 0.11)
+    mean_return = 3.5
+    return normal(1 + mean_return / 100, 0.14)
 
 def global_bonds_return():
     """

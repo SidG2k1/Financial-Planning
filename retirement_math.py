@@ -10,31 +10,43 @@ def format_money(val):
 
 mode = "plot"
 mode = "stat"
+show_ptiles = False
 simulations = 0
 if mode == 'stat':
-    target_run_dur_secs = 3
+    target_run_dur_secs = 2
     simulations = target_run_dur_secs * 10000 // 20
 else:
     simulations = 5
 
 age = 22
-ret_age = 60
+ret_age = 50
 expected_lifespan = 100
 lifestyle_inflation = 1.01
 nw = 50
 
 mean_case = [230] * 3 + [260] * 3 + [400] * 4 + [550] * 200
-# optimistic_case = [450] + [350] * 4 + [450] * 3 + [600] * 6 + [800] * 100
+optimistic_case = [450] + [400] * 2 + [500] * 3 + [600] * 6 + [800] * 100
 income = mean_case
 
-realized_income = income[:1 + ret_age - age] + \
-    [0] * (expected_lifespan - ret_age)
-
-init_exp = 60
+init_exp = 65
 expenses = [init_exp * lifestyle_inflation**i for i in range(200)]
 
-expenses = [60] * 10 + [60 + 30] * 20 + [60] * 10 + [40] * 100
+# expenses = [60] * 10 + [60 + 30] * 20 + [60] * 10 + [40] * 100
 #           new grad,   child,          post-child,  retirement
+
+realized_income = income[:1 + ret_age - age] + [0] * (expected_lifespan - ret_age)
+
+# Average Social Security benefit is $1,503/month
+# Average Canada Pension Plan benefit is $1,000/month
+# We assume a 35% withholding rate for taxes and add them to income past age 65
+for i in range(65, expected_lifespan + 1):
+    # Div 1000 because we're working in $1000 units
+    cpp = 1000 * 12 / 1000
+    ss = 1503 * 12 / 1000
+    if len(realized_income) <= i:
+        break
+    realized_income[i] += (1 - 0.35) * (cpp + ss)
+
 
 start_time = curr_time()
 
@@ -48,14 +60,22 @@ def run_sim():
     medium_risk_portfolio = StockPortfolio(0)
     low_risk_portfolio = CashPortfolio(0)
 
+    # transition_portfolios = TemporalHybridPortfolio(0, [LeveragedStockPortfolio(0), 
+    #                                                     HybridPortfolio(0, [LeveragedStockPortfolio(0), StockPortfolio(0)], [0.5, 0.5]), 
+    #                                                     StockPortfolio(0), 
+    #                                                     CashPortfolio(0)], [
+    #                                                 year - age + 0 * expected_lifespan/4,
+    #                                                 year - age + 1 * expected_lifespan/4,
+    #                                                 year - age + 2 * expected_lifespan/4,
+    #                                                 year - age + 3 * expected_lifespan/4,
+    #                                                 year - age + 4 * expected_lifespan/4,
+    #                                                 ])
     transition_portfolios = TemporalHybridPortfolio(0, [LeveragedStockPortfolio(0), 
-                                                        HybridPortfolio(0, [LeveragedStockPortfolio(0), StockPortfolio(0)], [0.5, 0.5]), 
+                                                        LeveragedStockPortfolio(0), 
                                                         StockPortfolio(0), 
                                                         CashPortfolio(0)], [
                                                     year - age + 0 * expected_lifespan/4,
-                                                    year - age + 1 * expected_lifespan/4,
                                                     year - age + 2 * expected_lifespan/4,
-                                                    year - age + 3 * expected_lifespan/4,
                                                     year - age + 4 * expected_lifespan/4,
                                                     ])
 
@@ -162,29 +182,16 @@ if mode == 'stat':
         # Average
         type_to_agg[type]["Average Ending NW"] = str(int(10 * sum(nw_traj) / len(nw_traj)) / 10) + 'M'
 
-        """
-        for port_name, nw_data in clarified.items():
-            plt.plot(nw_data[0], nw_data[1])
-            legend.append(port_name)
-        plt.legend(legend)
-
-        # Add labels to the axes
-        plt.xlabel('Age')
-        plt.ylabel('Net Worth ($M)')
-        # Show fat red line at retirement age and 0 net worth
-        plt.axvline(x=ret_age, color='r', linestyle='--')
-        plt.axhline(y=0, color='r', linestyle='--')
-        plt.show()
-        """
-        import numpy as np
-        pctiles = [i for i in range(0, 99)]
-        plt.plot(pctiles, np.percentile(nw_traj, pctiles))
-        # plt.plot(sorted(nw_traj))
-        plt.legend([type])
-        plt.xlabel("Percentile")
-        plt.ylabel("NW")
-        plt.axhline(y=0, color='r', linestyle='--')
-        plt.show()
+        if show_ptiles:
+            import numpy as np
+            pctiles = [i for i in range(0, 50)]
+            plt.plot(pctiles, np.percentile(nw_traj, pctiles))
+            # plt.plot(sorted(nw_traj))
+            plt.legend([type])
+            plt.xlabel("Percentile")
+            plt.ylabel("NW")
+            plt.axhline(y=0, color='r', linestyle='--')
+            plt.show()
 
 
         # next agg
