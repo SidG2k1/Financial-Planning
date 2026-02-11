@@ -95,25 +95,27 @@ class StockPortfolio(Portfolio):
 
 
 class LeveragedStockPortfolio(Portfolio):
-    """Leveraged equity portfolio with borrowing costs.
+    """Leveraged equity portfolio with dynamic borrowing costs.
 
     Leverage of 2x means for every $1 of equity, $1 is borrowed.
-    Annual borrowing cost is (leverage - 1) * BORROW_COST_RATE.
+    Annual borrowing cost is (leverage - 1) * margin_fee, where
+    margin_fee = bond_yield + broker_spread (set externally each year).
     """
 
-    BORROW_COST_RATE: float = 0.02
-
     def __init__(self, init_nw: float, leverage: float,
-                 real_mkt_return_func: Callable[[], float]) -> None:
+                 real_mkt_return_func: Callable[[], float],
+                 margin_fee_func: Callable[[], float]) -> None:
         super().__init__(init_nw)
         if leverage < 1:
             raise ValueError(f"Leverage must be >= 1, got {leverage}")
         self.leverage = leverage
         self.real_mkt_return_func = real_mkt_return_func
+        self.margin_fee_func = margin_fee_func
 
     def pass_year(self) -> None:
         """Apply leveraged market returns minus borrowing costs and record."""
         raw_return = self.real_mkt_return_func()
-        fees = (self.leverage - 1) * self.BORROW_COST_RATE
+        margin_fee = self.margin_fee_func()
+        fees = (self.leverage - 1) * margin_fee
         self.nw *= ((raw_return - 1) * self.leverage + 1) - fees
         self.nw_history.append(self.nw)

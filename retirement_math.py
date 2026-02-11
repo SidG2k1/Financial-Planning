@@ -49,9 +49,19 @@ class SimulationConfig:
         **{a: 40 for a in range(25, 70, 5)},  # Car every 5 years
     })
 
-    # Market assumptions
-    real_return_mean: float = 0.035     # 3.5% real return
-    real_return_std: float = 0.1        # 10% volatility
+    # Market return decomposition: E[stock] = bond_yield + ERP
+    equity_risk_premium: float = 0.05   # 5% ERP (historical average)
+    stock_vol: float = 0.10             # 10% annualized equity volatility
+
+    # Real bond yield dynamics (Vasicek mean-reverting model)
+    #   dr = κ(θ - r)dt + σ_r dW
+    initial_bond_yield: float = 0.02    # current real yield (~TIPS rate)
+    long_run_bond_yield: float = 0.02   # long-run equilibrium θ
+    bond_yield_mean_reversion: float = 0.15  # mean reversion speed κ
+    bond_yield_vol: float = 0.012       # annual volatility of yield changes
+
+    # Leverage costs: margin_fee = bond_yield + spread
+    margin_spread: float = 0.015        # broker spread above risk-free rate
 
     # Tax: progressive federal brackets (2023) + flat state rate
     state_tax_rate: float = 0.15
@@ -103,6 +113,47 @@ def format_money(val: float) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Optimal Leverage (Kelly Criterion)
+# ---------------------------------------------------------------------------
+
+def compute_optimal_leverage(config: SimulationConfig) -> float:
+    """Compute Kelly-optimal leverage ratio.
+
+    Maximizes expected log growth rate of the leveraged portfolio:
+        E[log(1 + r_lev)] ≈ E[r_lev] - Var(r_lev)/2
+    where r_lev = L * r_stock - (L-1) * margin_fee.
+
+    The excess return over borrowing cost = ERP - spread, which is
+    independent of bond yield. Optimal leverage:
+        L* = (ERP - spread) / σ²
+    """
+    excess = config.equity_risk_premium - config.margin_spread
+    if excess <= 0:
+        return 1.0  # No benefit to leverage if spread eats the ERP
+    return excess / config.stock_vol ** 2
+
+
+# ---------------------------------------------------------------------------
+# Vasicek Bond Yield Model
+# ---------------------------------------------------------------------------
+
+def evolve_bond_yield(
+    current_yield: float,
+    config: SimulationConfig,
+    rng: np.random.Generator,
+) -> float:
+    """Advance the real bond yield by one year using the Vasicek model.
+
+    dr = κ(θ - r)dt + σ_r * dW
+    Floor at -2% to prevent unrealistic extremes.
+    """
+    drift = config.bond_yield_mean_reversion * (config.long_run_bond_yield - current_yield)
+    shock = config.bond_yield_vol * rng.standard_normal()
+    new_yield = current_yield + drift + shock
+    return max(new_yield, -0.02)  # Real yields can go negative but floor at -2%
+
+
+# ---------------------------------------------------------------------------
 # Simulation
 # ---------------------------------------------------------------------------
 
@@ -112,6 +163,11 @@ def run_simulation(
     quiet: bool = False,
 ) -> PortfolioManager:
     """Run the retirement simulation and return the PortfolioManager.
+
+    Market model:
+        stock_return = bond_yield + ERP + σ * ε     (ε ~ N(0,1))
+        margin_fee   = bond_yield + spread
+        bond_yield follows Vasicek mean-reverting process
 
     Args:
         config: Simulation parameters (uses defaults if None).
@@ -124,8 +180,14 @@ def run_simulation(
         seed = np.random.randint(0, 1_000_000)
 
     rng = np.random.default_rng(seed)
+
     if not quiet:
+        kelly = compute_optimal_leverage(config)
         print(f"Simulation seed: {seed}")
+        print(f"E[stock return] = bond_yield + ERP = ~{config.initial_bond_yield + config.equity_risk_premium:.1%}")
+        print(f"Margin fee = bond_yield + spread = ~{config.initial_bond_yield + config.margin_spread:.1%}")
+        print(f"Kelly optimal leverage: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x  |  Using: {config.leverage_ratio:.2f}x")
+        print()
 
     # Build income & expense arrays sized to simulation duration
     sim_years = config.expected_lifespan - config.start_age + 1
@@ -134,22 +196,37 @@ def run_simulation(
     expenses = [config.initial_expenses * config.lifestyle_inflation ** i
                 for i in range(sim_years)]
 
-    # Market return shared across all portfolios each year
+    # Mutable containers for closures shared with portfolio objects
     year_return = [1.0]
+    year_margin_fee = [0.0]
 
     def real_mkt_return() -> float:
         return year_return[0]
+
+    def margin_fee() -> float:
+        return year_margin_fee[0]
 
     portfolios = PortfolioManager([
         CashPortfolio(config.initial_net_worth),
         StockPortfolio(config.initial_net_worth, real_mkt_return),
         LeveragedStockPortfolio(
-            config.initial_net_worth, config.leverage_ratio, real_mkt_return
+            config.initial_net_worth, config.leverage_ratio,
+            real_mkt_return, margin_fee,
         ),
     ])
 
+    bond_yield = config.initial_bond_yield
+
     for i, curr_age in enumerate(range(config.start_age, config.expected_lifespan + 1)):
-        year_return[0] = 1 + rng.normal(config.real_return_mean, config.real_return_std)
+        # Evolve bond yield (Vasicek mean-reverting process)
+        bond_yield = evolve_bond_yield(bond_yield, config, rng)
+
+        # Stock return = bond_yield + ERP + vol * noise
+        stock_noise = rng.standard_normal()
+        year_return[0] = 1 + bond_yield + config.equity_risk_premium + config.stock_vol * stock_noise
+
+        # Margin fee = bond_yield + broker spread
+        year_margin_fee[0] = max(bond_yield + config.margin_spread, 0.0)
 
         inc = post_tax(realized_income[i], config)
         exp = expenses[i]
@@ -161,8 +238,10 @@ def run_simulation(
         portfolios.add_money(inc)
 
         if not quiet:
-            print(f"Age {curr_age:3d}:  income={format_money(inc)}  "
-                  f"expenses={format_money(exp)}  nw={portfolios.get_nw()}")
+            print(f"Age {curr_age:3d}:  bond_yield={bond_yield:+.2%}  "
+                  f"margin_fee={year_margin_fee[0]:.2%}  "
+                  f"income={format_money(inc)}  expenses={format_money(exp)}  "
+                  f"nw={portfolios.get_nw()}")
 
     return portfolios
 
@@ -268,6 +347,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Retirement financial planning simulator'
     )
+    # Personal
     parser.add_argument('--start-age', type=int, default=25,
                         help='Age to start simulation (default: 25)')
     parser.add_argument('--retirement-age', type=int, default=37,
@@ -278,8 +358,21 @@ def parse_args() -> argparse.Namespace:
                         help='Initial net worth in $1,000 units (default: 500)')
     parser.add_argument('--initial-expenses', type=float, default=60,
                         help='Initial annual expenses in $1,000 units (default: 60)')
+    # Market model
+    parser.add_argument('--erp', type=float, default=0.05,
+                        help='Equity risk premium (default: 0.05)')
+    parser.add_argument('--stock-vol', type=float, default=0.10,
+                        help='Annualized equity volatility (default: 0.10)')
+    parser.add_argument('--bond-yield', type=float, default=0.02,
+                        help='Initial real bond yield (default: 0.02)')
+    parser.add_argument('--margin-spread', type=float, default=0.015,
+                        help='Broker spread above bond yield (default: 0.015)')
+    # Leverage
     parser.add_argument('--leverage', type=float, default=2.0,
                         help='Leverage ratio for leveraged portfolio (default: 2.0)')
+    parser.add_argument('--optimal-leverage', action='store_true',
+                        help='Use Kelly-optimal leverage instead of --leverage')
+    # Simulation mode
     parser.add_argument('--monte-carlo', type=int, default=0, metavar='N',
                         help='Run N Monte Carlo simulations (default: 0 = single run)')
     parser.add_argument('--seed', type=int, default=None,
@@ -289,14 +382,25 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    leverage = args.leverage
     config = SimulationConfig(
         start_age=args.start_age,
         retirement_age=args.retirement_age,
         expected_lifespan=args.lifespan,
         initial_net_worth=args.initial_nw,
         initial_expenses=args.initial_expenses,
-        leverage_ratio=args.leverage,
+        equity_risk_premium=args.erp,
+        stock_vol=args.stock_vol,
+        initial_bond_yield=args.bond_yield,
+        long_run_bond_yield=args.bond_yield,
+        margin_spread=args.margin_spread,
+        leverage_ratio=leverage,
     )
+
+    if args.optimal_leverage:
+        config.leverage_ratio = compute_optimal_leverage(config)
+        print(f"Using Kelly-optimal leverage: {config.leverage_ratio:.2f}x")
 
     if args.monte_carlo > 0:
         print(f"Running {args.monte_carlo} Monte Carlo simulations...")
