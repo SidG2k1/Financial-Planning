@@ -94,6 +94,17 @@ class SimulationConfig:
     # Leverage for leveraged portfolio
     leverage_ratio: float = 2.0
 
+    # Utility scoring: U(c) = c^α, V = Σ β^t · U(spending_t)
+    utility_power: float = 0.8         # CRRA exponent α
+    discount_rate: float = 0.03        # annual time preference δ (β = 1/(1+δ))
+
+
+@dataclass
+class SimulationResult:
+    """Results from a single simulation run."""
+    portfolios: PortfolioManager
+    spending: List[List[float]]  # spending[portfolio_idx][year_idx], $1k units
+
 
 # ---------------------------------------------------------------------------
 # Tax & Formatting Helpers
@@ -125,6 +136,48 @@ def post_tax(gross_income: float, config: SimulationConfig) -> float:
 def format_money(val: float) -> str:
     """Format a $1,000-unit value as a human-readable dollar string."""
     return '${:,}'.format(int(val * 1000))
+
+
+# ---------------------------------------------------------------------------
+# CRRA Utility
+# ---------------------------------------------------------------------------
+
+def compute_lifetime_utility(
+    spending: List[float],
+    config: SimulationConfig,
+) -> float:
+    """Discounted CRRA utility of a lifetime spending stream.
+
+    V = Σ_{t=0}^{T} β^t · spending_t^α
+    where α = utility_power, β = 1/(1+discount_rate).
+    """
+    alpha = config.utility_power
+    beta = 1.0 / (1.0 + config.discount_rate)
+    total = 0.0
+    for t, c in enumerate(spending):
+        if c > 0:
+            total += (beta ** t) * (c ** alpha)
+    return total
+
+
+def certainty_equivalent(
+    utility: float,
+    n_years: int,
+    config: SimulationConfig,
+) -> float:
+    """Constant annual spending ($1k) giving the same lifetime utility.
+
+    Solves: V = CE^α · Σ β^t  →  CE = (V / Σ β^t)^(1/α)
+    """
+    alpha = config.utility_power
+    beta = 1.0 / (1.0 + config.discount_rate)
+    if abs(beta - 1.0) < 1e-10:
+        annuity = float(n_years)
+    else:
+        annuity = (1.0 - beta ** n_years) / (1.0 - beta)
+    if annuity <= 0 or utility <= 0:
+        return 0.0
+    return (utility / annuity) ** (1.0 / alpha)
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +230,8 @@ def run_simulation(
     config: SimulationConfig | None = None,
     seed: int | None = None,
     quiet: bool = False,
-) -> PortfolioManager:
-    """Run the retirement simulation and return the PortfolioManager.
+) -> SimulationResult:
+    """Run the retirement simulation and return results with spending history.
 
     Market model:
         bond_yield follows Vasicek mean-reverting process
@@ -189,6 +242,9 @@ def run_simulation(
         - Fat tails: ε ~ Student-t(df) normalized to unit variance
         - Stochastic vol: log(σ_t/σ̄) = ρ·log(σ_{t-1}/σ̄) + η·ε_vol
         - Stock-bond correlation: ε_stock = corr·ε_bond + √(1-corr²)·ε_indep
+
+    Spending is constrained: if a portfolio can't afford planned expenses,
+    spending is reduced to what's available (NW + income, floored at 0).
 
     Args:
         config: Simulation parameters (uses defaults if None).
@@ -238,6 +294,8 @@ def run_simulation(
             real_mkt_return, margin_fee,
         ),
     ])
+    n_portfolios = len(portfolios.portfolios)
+    spending_records: List[List[float]] = [[] for _ in range(n_portfolios)]
 
     bond_yield = config.initial_bond_yield
     log_vol = 0.0  # log(σ_t / σ_bar), starts at long-run mean
@@ -287,8 +345,14 @@ def run_simulation(
             exp += config.one_time_expenses[curr_age]
 
         portfolios.pass_year()
-        portfolios.remove_money(exp)
-        portfolios.add_money(inc)
+
+        # Constrained spending: each portfolio spends min(planned, available)
+        for j, p in enumerate(portfolios.portfolios):
+            available = p.get_nw() + inc
+            actual_spend = max(0.0, min(exp, available))
+            spending_records[j].append(actual_spend)
+            p.add_money(inc)
+            p.remove_money(actual_spend)
 
         if not quiet:
             print(f"Age {curr_age:3d}:  bond_yield={bond_yield:+.2%}  "
@@ -296,15 +360,16 @@ def run_simulation(
                   f"income={format_money(inc)}  expenses={format_money(exp)}  "
                   f"nw={portfolios.get_nw()}")
 
-    return portfolios
+    return SimulationResult(portfolios=portfolios, spending=spending_records)
 
 
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
 
-def plot_results(portfolios: PortfolioManager, config: SimulationConfig) -> None:
+def plot_results(result: SimulationResult, config: SimulationConfig) -> None:
     """Plot net worth history for all portfolios over the simulation period."""
+    portfolios = result.portfolios
     histories = portfolios.get_nw_history()
     ages = list(range(config.start_age, config.start_age + len(histories[0])))
 
@@ -335,16 +400,24 @@ def run_monte_carlo(
     Returns a dict mapping portfolio class names to:
         'ages': list of ages
         'median', 'p10', 'p25', 'p75', 'p90': arrays of NW in $M
+        'mean_utility', 'mean_ce': expected utility metrics (theoretically correct)
+        'median_utility', 'median_ce': robust utility metrics
     """
     all_histories: Dict[str, List[List[float]]] = {}
+    all_utilities: Dict[str, List[float]] = {}
+
+    sim_years = config.expected_lifespan - config.start_age + 1
 
     for sim in range(n_simulations):
-        pm = run_simulation(config, quiet=True)
-        for p in pm.portfolios:
+        result = run_simulation(config, quiet=True)
+        for j, p in enumerate(result.portfolios.portfolios):
             name = type(p).__name__
             if name not in all_histories:
                 all_histories[name] = []
+                all_utilities[name] = []
             all_histories[name].append(p.get_nw_history())
+            all_utilities[name].append(
+                compute_lifetime_utility(result.spending[j], config))
 
     first_key = next(iter(all_histories))
     ages = list(range(config.start_age,
@@ -353,6 +426,9 @@ def run_monte_carlo(
     results: Dict[str, Dict] = {}
     for name, histories in all_histories.items():
         arr = np.array(histories) / 1000  # Convert to $M
+        u_arr = np.array(all_utilities[name])
+        mean_u = float(np.mean(u_arr))
+        median_u = float(np.median(u_arr))
         results[name] = {
             'ages': ages,
             'median': np.median(arr, axis=0),
@@ -360,6 +436,10 @@ def run_monte_carlo(
             'p25': np.percentile(arr, 25, axis=0),
             'p75': np.percentile(arr, 75, axis=0),
             'p90': np.percentile(arr, 90, axis=0),
+            'mean_utility': mean_u,
+            'mean_ce': certainty_equivalent(mean_u, sim_years, config),
+            'median_utility': median_u,
+            'median_ce': certainty_equivalent(median_u, sim_years, config),
         }
 
     return results
@@ -382,14 +462,29 @@ def plot_monte_carlo(results: Dict[str, Dict], config: SimulationConfig) -> None
         ax.plot(ages, data['median'], linewidth=2, label='Median')
         ax.axvline(x=config.retirement_age, color='r', linestyle='--', alpha=0.5)
         ax.axhline(y=0, color='r', linestyle='--', alpha=0.5)
-        ax.set_title(name)
+        ce = data.get('mean_ce', data.get('median_ce', 0))
+        ax.set_title(f'{name}\nE[CE]={format_money(ce)}/yr')
         ax.set_xlabel('Age')
         ax.legend(fontsize=8)
 
     axes[0].set_ylabel('Net Worth ($M)')
-    fig.suptitle('Monte Carlo Retirement Simulation')
+    fig.suptitle('Monte Carlo Retirement Simulation (U(c)=c^{:.1f})'.format(
+        config.utility_power))
     plt.tight_layout()
     plt.show()
+
+    # Print utility summary
+    print(f"\n=== Utility Summary: U(c) = c^{config.utility_power}, "
+          f"δ={config.discount_rate:.0%} ===")
+    print(f"{'Portfolio':<28s}  {'E[Utility]':>10s}  {'E[CE]':>12s}  "
+          f"{'Med[CE]':>12s}")
+    print("-" * 68)
+    for name, data in results.items():
+        print(f"{name:<28s}  {data['mean_utility']:>10,.0f}  "
+              f"{format_money(data['mean_ce']):>12s}/yr  "
+              f"{format_money(data['median_ce']):>12s}/yr")
+    print("(E[CE] = expected-utility CE; Med[CE] = median-path CE)")
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -407,15 +502,17 @@ def run_leverage_sweep(
     tracks the LeveragedStockPortfolio (index 2) outcomes.
 
     Returns dict with keys: 'leverage', 'median_nw', 'p10_nw', 'p25_nw',
-    'p75_nw', 'p90_nw', 'ruin_pct' (fraction of sims where NW goes < 0).
+    'p75_nw', 'p90_nw', 'ruin_pct', 'mean_ce', 'median_ce'.
     """
     if leverage_range is None:
         leverage_range = [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5]
 
+    sim_years = config.expected_lifespan - config.start_age + 1
+
     results: Dict[str, List] = {
         'leverage': [], 'median_nw': [],
         'p10_nw': [], 'p25_nw': [], 'p75_nw': [], 'p90_nw': [],
-        'ruin_pct': [],
+        'ruin_pct': [], 'mean_ce': [], 'median_ce': [],
     }
 
     from dataclasses import replace
@@ -423,17 +520,25 @@ def run_leverage_sweep(
     for lev in leverage_range:
         cfg = replace(config, leverage_ratio=lev)
         final_nws = []
+        utilities = []
         ruin_count = 0
 
         for _ in range(n_simulations):
-            pm = run_simulation(cfg, quiet=True)
-            lev_portfolio = pm.portfolios[2]  # LeveragedStockPortfolio
+            result = run_simulation(cfg, quiet=True)
+            lev_portfolio = result.portfolios.portfolios[2]
             history = lev_portfolio.get_nw_history()
             final_nws.append(history[-1])
             if min(history) < 0:
                 ruin_count += 1
+            utilities.append(
+                compute_lifetime_utility(result.spending[2], cfg))
 
         arr = np.array(final_nws) / 1000  # Convert to $M
+        mean_u = float(np.mean(utilities))
+        median_u = float(np.median(utilities))
+        mean_ce = certainty_equivalent(mean_u, sim_years, cfg)
+        median_ce = certainty_equivalent(median_u, sim_years, cfg)
+
         results['leverage'].append(lev)
         results['median_nw'].append(float(np.median(arr)))
         results['p10_nw'].append(float(np.percentile(arr, 10)))
@@ -441,17 +546,20 @@ def run_leverage_sweep(
         results['p75_nw'].append(float(np.percentile(arr, 75)))
         results['p90_nw'].append(float(np.percentile(arr, 90)))
         results['ruin_pct'].append(ruin_count / n_simulations)
+        results['mean_ce'].append(mean_ce)
+        results['median_ce'].append(median_ce)
 
         print(f"  {lev:.2f}x:  median=${results['median_nw'][-1]*1000:>10,.0f}k  "
               f"p10=${results['p10_nw'][-1]*1000:>10,.0f}k  "
-              f"ruin={results['ruin_pct'][-1]:.1%}")
+              f"ruin={results['ruin_pct'][-1]:.1%}  "
+              f"E[CE]={format_money(mean_ce)}/yr")
 
     return results
 
 
 def plot_leverage_sweep(sweep: Dict[str, List], config: SimulationConfig) -> None:
-    """Plot leverage sweep results: NW percentiles and ruin probability."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    """Plot leverage sweep results: NW percentiles, ruin probability, and CE."""
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
     kelly = compute_optimal_leverage(config)
     levs = sweep['leverage']
 
@@ -470,7 +578,7 @@ def plot_leverage_sweep(sweep: Dict[str, List], config: SimulationConfig) -> Non
     ax1.set_yscale('symlog', linthresh=1)
     ax1.legend(fontsize=8)
 
-    # Right panel: Ruin probability vs leverage
+    # Center panel: Ruin probability vs leverage
     ax2.plot(levs, [r * 100 for r in sweep['ruin_pct']], 'o-',
              linewidth=2, color='red')
     ax2.axhline(y=5, color='orange', linestyle='--', alpha=0.7,
@@ -482,6 +590,20 @@ def plot_leverage_sweep(sweep: Dict[str, List], config: SimulationConfig) -> Non
     ax2.set_title('Ruin Risk vs Leverage')
     ax2.set_ylim(bottom=0)
     ax2.legend(fontsize=8)
+
+    # Right panel: Certainty-equivalent spending vs leverage
+    ce_vals = sweep['mean_ce']
+    ax3.plot(levs, [c * 1000 for c in ce_vals], 'o-',
+             linewidth=2, color='purple')
+    ax3.axvline(x=kelly, color='green', linestyle='--', alpha=0.7,
+                label=f'Kelly optimal ({kelly:.2f}x)')
+    best_idx = int(np.argmax(ce_vals))
+    ax3.axvline(x=levs[best_idx], color='purple', linestyle=':',
+                alpha=0.7, label=f'Utility max ({levs[best_idx]:.2f}x)')
+    ax3.set_xlabel('Leverage Ratio')
+    ax3.set_ylabel('E[CE] Spending ($k/yr)')
+    ax3.set_title(f'Expected CE (U=c^{config.utility_power})')
+    ax3.legend(fontsize=8)
 
     fig.suptitle(f'Leverage Sweep (age {config.start_age}-{config.expected_lifespan}, '
                  f'retire {config.retirement_age})')
@@ -529,6 +651,11 @@ def parse_args() -> argparse.Namespace:
                         help='Run leverage sweep with N sims per level (default: 0 = off)')
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed for reproducibility')
+    # Utility
+    parser.add_argument('--discount-rate', type=float, default=0.03,
+                        help='Annual time discount rate for utility (default: 0.03)')
+    parser.add_argument('--utility-power', type=float, default=0.8,
+                        help='CRRA exponent: U(c) = c^α (default: 0.8)')
     return parser.parse_args()
 
 
@@ -548,16 +675,22 @@ def main() -> None:
         long_run_bond_yield=args.bond_yield,
         margin_spread=args.margin_spread,
         leverage_ratio=leverage,
+        utility_power=args.utility_power,
+        discount_rate=args.discount_rate,
     )
 
     if args.optimal_leverage:
         config.leverage_ratio = compute_optimal_leverage(config)
         print(f"Using Kelly-optimal leverage: {config.leverage_ratio:.2f}x")
 
+    sim_years = config.expected_lifespan - config.start_age + 1
+
     if args.leverage_sweep > 0:
         print(f"Running leverage sweep ({args.leverage_sweep} sims per level)...")
         kelly = compute_optimal_leverage(config)
-        print(f"Kelly optimal: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x\n")
+        print(f"Kelly optimal: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x")
+        print(f"Utility: U(c) = c^{config.utility_power}, "
+              f"discount rate = {config.discount_rate:.0%}\n")
         sweep = run_leverage_sweep(config, n_simulations=args.leverage_sweep)
         plot_leverage_sweep(sweep, config)
     elif args.monte_carlo > 0:
@@ -565,8 +698,18 @@ def main() -> None:
         results = run_monte_carlo(config, n_simulations=args.monte_carlo)
         plot_monte_carlo(results, config)
     else:
-        portfolios = run_simulation(config, seed=args.seed)
-        plot_results(portfolios, config)
+        result = run_simulation(config, seed=args.seed)
+        # Display utility scores
+        print(f"\n=== Lifetime Utility (U(c) = c^{config.utility_power}, "
+              f"δ={config.discount_rate:.0%}) ===")
+        print(f"{'Portfolio':<30s}  {'Utility':>10s}  {'CE Spending':>14s}")
+        print("-" * 58)
+        for j, p in enumerate(result.portfolios.portfolios):
+            u = compute_lifetime_utility(result.spending[j], config)
+            ce = certainty_equivalent(u, sim_years, config)
+            print(f"{type(p).__name__:<30s}  {u:>10,.0f}  {format_money(ce):>14s}/yr")
+        print()
+        plot_results(result, config)
 
 
 if __name__ == '__main__':
