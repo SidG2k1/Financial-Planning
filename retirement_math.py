@@ -393,6 +393,103 @@ def plot_monte_carlo(results: Dict[str, Dict], config: SimulationConfig) -> None
 
 
 # ---------------------------------------------------------------------------
+# Leverage Sweep
+# ---------------------------------------------------------------------------
+
+def run_leverage_sweep(
+    config: SimulationConfig,
+    leverage_range: List[float] | None = None,
+    n_simulations: int = 500,
+) -> Dict[str, List]:
+    """Sweep across leverage ratios and compute risk/reward statistics.
+
+    For each leverage level, runs n_simulations Monte Carlo sims and
+    tracks the LeveragedStockPortfolio (index 2) outcomes.
+
+    Returns dict with keys: 'leverage', 'median_nw', 'p10_nw', 'p25_nw',
+    'p75_nw', 'p90_nw', 'ruin_pct' (fraction of sims where NW goes < 0).
+    """
+    if leverage_range is None:
+        leverage_range = [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 3.5]
+
+    results: Dict[str, List] = {
+        'leverage': [], 'median_nw': [],
+        'p10_nw': [], 'p25_nw': [], 'p75_nw': [], 'p90_nw': [],
+        'ruin_pct': [],
+    }
+
+    from dataclasses import replace
+
+    for lev in leverage_range:
+        cfg = replace(config, leverage_ratio=lev)
+        final_nws = []
+        ruin_count = 0
+
+        for _ in range(n_simulations):
+            pm = run_simulation(cfg, quiet=True)
+            lev_portfolio = pm.portfolios[2]  # LeveragedStockPortfolio
+            history = lev_portfolio.get_nw_history()
+            final_nws.append(history[-1])
+            if min(history) < 0:
+                ruin_count += 1
+
+        arr = np.array(final_nws) / 1000  # Convert to $M
+        results['leverage'].append(lev)
+        results['median_nw'].append(float(np.median(arr)))
+        results['p10_nw'].append(float(np.percentile(arr, 10)))
+        results['p25_nw'].append(float(np.percentile(arr, 25)))
+        results['p75_nw'].append(float(np.percentile(arr, 75)))
+        results['p90_nw'].append(float(np.percentile(arr, 90)))
+        results['ruin_pct'].append(ruin_count / n_simulations)
+
+        print(f"  {lev:.2f}x:  median=${results['median_nw'][-1]*1000:>10,.0f}k  "
+              f"p10=${results['p10_nw'][-1]*1000:>10,.0f}k  "
+              f"ruin={results['ruin_pct'][-1]:.1%}")
+
+    return results
+
+
+def plot_leverage_sweep(sweep: Dict[str, List], config: SimulationConfig) -> None:
+    """Plot leverage sweep results: NW percentiles and ruin probability."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    kelly = compute_optimal_leverage(config)
+    levs = sweep['leverage']
+
+    # Left panel: Final NW percentiles vs leverage (log scale)
+    ax1.fill_between(levs, sweep['p10_nw'], sweep['p90_nw'],
+                     alpha=0.15, label='10th-90th %ile')
+    ax1.fill_between(levs, sweep['p25_nw'], sweep['p75_nw'],
+                     alpha=0.3, label='25th-75th %ile')
+    ax1.plot(levs, sweep['median_nw'], 'o-', linewidth=2, label='Median')
+    ax1.axvline(x=kelly, color='green', linestyle='--', alpha=0.7,
+                label=f'Kelly optimal ({kelly:.2f}x)')
+    ax1.axhline(y=0, color='r', linestyle='--', alpha=0.3)
+    ax1.set_xlabel('Leverage Ratio')
+    ax1.set_ylabel('Final Net Worth ($M)')
+    ax1.set_title('Final NW vs Leverage')
+    ax1.set_yscale('symlog', linthresh=1)
+    ax1.legend(fontsize=8)
+
+    # Right panel: Ruin probability vs leverage
+    ax2.plot(levs, [r * 100 for r in sweep['ruin_pct']], 'o-',
+             linewidth=2, color='red')
+    ax2.axhline(y=5, color='orange', linestyle='--', alpha=0.7,
+                label='5% risk threshold')
+    ax2.axvline(x=kelly, color='green', linestyle='--', alpha=0.7,
+                label=f'Kelly optimal ({kelly:.2f}x)')
+    ax2.set_xlabel('Leverage Ratio')
+    ax2.set_ylabel('Ruin Probability (%)')
+    ax2.set_title('Ruin Risk vs Leverage')
+    ax2.set_ylim(bottom=0)
+    ax2.legend(fontsize=8)
+
+    fig.suptitle(f'Leverage Sweep (age {config.start_age}-{config.expected_lifespan}, '
+                 f'retire {config.retirement_age})')
+    plt.tight_layout()
+    plt.show()
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -428,6 +525,8 @@ def parse_args() -> argparse.Namespace:
     # Simulation mode
     parser.add_argument('--monte-carlo', type=int, default=0, metavar='N',
                         help='Run N Monte Carlo simulations (default: 0 = single run)')
+    parser.add_argument('--leverage-sweep', type=int, default=0, metavar='N',
+                        help='Run leverage sweep with N sims per level (default: 0 = off)')
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed for reproducibility')
     return parser.parse_args()
@@ -455,7 +554,13 @@ def main() -> None:
         config.leverage_ratio = compute_optimal_leverage(config)
         print(f"Using Kelly-optimal leverage: {config.leverage_ratio:.2f}x")
 
-    if args.monte_carlo > 0:
+    if args.leverage_sweep > 0:
+        print(f"Running leverage sweep ({args.leverage_sweep} sims per level)...")
+        kelly = compute_optimal_leverage(config)
+        print(f"Kelly optimal: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x\n")
+        sweep = run_leverage_sweep(config, n_simulations=args.leverage_sweep)
+        plot_leverage_sweep(sweep, config)
+    elif args.monte_carlo > 0:
         print(f"Running {args.monte_carlo} Monte Carlo simulations...")
         results = run_monte_carlo(config, n_simulations=args.monte_carlo)
         plot_monte_carlo(results, config)
