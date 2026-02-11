@@ -97,6 +97,13 @@ class SimulationConfig:
     discount_rate: float = 0.03        # annual time preference δ (β = 1/(1+δ))
     fire_multiplier: float = 1.0       # utility mult for retirement years (1.5 = FIRE)
 
+    # Vitality curve: v(age) = floor + (1-floor)*exp(-((age-peak)/half_life)^2)
+    # Captures declining health/energy/capacity to enjoy spending with age.
+    # Based on QALY literature: ~1.0 at 30, ~0.80 at 50, ~0.55 at 65, ~0.4 at 80.
+    vitality_peak_age: int = 30        # age of peak vitality
+    vitality_half_life: float = 35.0   # age offset for ~63% decay of (1-floor)
+    vitality_floor: float = 0.3        # minimum vitality (even at 100)
+
 
 @dataclass
 class SimulationResult:
@@ -131,6 +138,19 @@ def post_tax(gross_income: float, config: SimulationConfig) -> float:
 def format_money(val: float) -> str:
     """Format a $1,000-unit value as a human-readable dollar string."""
     return '${:,}'.format(int(val * 1000))
+
+
+def vitality_at_age(age: int, config: SimulationConfig) -> float:
+    """Vitality multiplier at a given age.
+
+    Gaussian decay from peak:
+        v(age) = floor + (1 - floor) * exp(-((age - peak) / half_life)^2)
+    For age <= peak, returns 1.0.
+    """
+    if age <= config.vitality_peak_age:
+        return 1.0
+    x = (age - config.vitality_peak_age) / config.vitality_half_life
+    return config.vitality_floor + (1.0 - config.vitality_floor) * np.exp(-(x * x))
 
 
 # ===========================================================================
@@ -242,42 +262,55 @@ class UtilityScorer(ABC):
 
 
 class CRRAUtility(UtilityScorer):
-    """CRRA power utility with optional FIRE multiplier.
+    """CRRA power utility with FIRE multiplier and vitality weighting.
 
-    V = Σ β^t · mult_t · c_t^α
-    where mult_t = fire_multiplier for retired years, 1.0 for working years.
+    V = Σ β^t · vitality(age_t) · fire_mult_t · c_t^α
+
+    Vitality captures declining health/energy with age (QALY-inspired).
+    FIRE multiplier captures extra value of freedom when retired.
     """
 
     def __init__(self, power: float = 0.8, discount_rate: float = 0.03,
                  fire_multiplier: float = 1.0,
-                 retirement_year_idx: int | None = None) -> None:
+                 retirement_year_idx: int | None = None,
+                 start_age: int = 25,
+                 config: SimulationConfig | None = None) -> None:
         self.power = power
         self.discount_rate = discount_rate
         self.fire_multiplier = fire_multiplier
         self.retirement_year_idx = retirement_year_idx
+        self.start_age = start_age
+        self._config = config or SimulationConfig()
+
+    def _weight(self, t: int) -> float:
+        """Compute weight for year t: β^t · vitality · fire_mult."""
+        beta = 1.0 / (1.0 + self.discount_rate)
+        age = self.start_age + t
+        v = vitality_at_age(age, self._config)
+        if (self.retirement_year_idx is not None
+                and t > self.retirement_year_idx):
+            m = self.fire_multiplier
+        else:
+            m = 1.0
+        return (beta ** t) * v * m
 
     def score(self, spending: List[float], config: SimulationConfig) -> float:
-        beta = 1.0 / (1.0 + self.discount_rate)
         total = 0.0
         for t, c in enumerate(spending):
             if c > 0:
-                if (self.retirement_year_idx is not None
-                        and t > self.retirement_year_idx):
-                    mult = self.fire_multiplier
-                else:
-                    mult = 1.0
-                total += (beta ** t) * mult * (c ** self.power)
+                total += self._weight(t) * (c ** self.power)
         return total
 
     def certainty_equivalent(self, utility: float, n_years: int) -> float:
-        beta = 1.0 / (1.0 + self.discount_rate)
-        if abs(beta - 1.0) < 1e-10:
-            annuity = float(n_years)
-        else:
-            annuity = (1.0 - beta ** n_years) / (1.0 - beta)
-        if annuity <= 0 or utility <= 0:
+        """CE: constant spending giving same lifetime utility.
+
+        Solves: Σ w_t · CE^α = V  →  CE = (V / Σ w_t)^(1/α)
+        where w_t = β^t · vitality(age_t) · fire_mult_t.
+        """
+        w_sum = sum(self._weight(t) for t in range(n_years))
+        if w_sum <= 0 or utility <= 0:
             return 0.0
-        return (utility / annuity) ** (1.0 / self.power)
+        return (utility / w_sum) ** (1.0 / self.power)
 
     @classmethod
     def from_config(cls, config: SimulationConfig) -> 'CRRAUtility':
@@ -287,6 +320,8 @@ class CRRAUtility(UtilityScorer):
             discount_rate=config.discount_rate,
             fire_multiplier=config.fire_multiplier,
             retirement_year_idx=config.retirement_age - config.start_age,
+            start_age=config.start_age,
+            config=config,
         )
 
 
@@ -820,8 +855,9 @@ def plot_retirement_sweep(
 
     ax1.set_xlabel('Retirement Age')
     ax1.set_ylabel('E[CE] Spending ($k/yr)')
+    vf = config.vitality_floor
     ax1.set_title(f'Optimal Retirement Age\n'
-                  f'(FIRE mult={config.fire_multiplier}, U=c^{config.utility_power})')
+                  f'(FIRE={config.fire_multiplier}, vit floor={vf}, U=c^{config.utility_power})')
     ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
 
@@ -841,9 +877,12 @@ def plot_retirement_sweep(
 
     # Summary table
     print(f"\n=== Retirement Age Sweep Summary ===")
-    print(f"FIRE multiplier = {config.fire_multiplier}, "
-          f"U(c) = c^{config.utility_power}, "
-          f"discount = {config.discount_rate:.0%}")
+    print(f"FIRE={config.fire_multiplier}, "
+          f"U(c)=c^{config.utility_power}, "
+          f"δ={config.discount_rate:.0%}, "
+          f"vitality(peak={config.vitality_peak_age}, "
+          f"hl={config.vitality_half_life:.0f}, "
+          f"floor={config.vitality_floor})")
     print(f"{'Portfolio':<28s}  {'Optimal Age':>11s}  {'E[CE]':>12s}")
     print("-" * 55)
     for name, data in results.items():
@@ -904,6 +943,15 @@ def parse_args() -> argparse.Namespace:
                         help='CRRA exponent: U(c) = c^α (default: 0.8)')
     parser.add_argument('--fire-multiplier', type=float, default=1.0,
                         help='Utility multiplier for retirement years (default: 1.0)')
+    # Vitality curve
+    parser.add_argument('--vitality-peak', type=int, default=30,
+                        help='Age of peak vitality (default: 30)')
+    parser.add_argument('--vitality-half-life', type=float, default=35.0,
+                        help='Vitality half-life in years from peak (default: 35)')
+    parser.add_argument('--vitality-floor', type=float, default=0.3,
+                        help='Minimum vitality multiplier (default: 0.3)')
+    parser.add_argument('--no-vitality', action='store_true',
+                        help='Disable vitality weighting (floor=1.0)')
     return parser.parse_args()
 
 
@@ -925,6 +973,9 @@ def main() -> None:
         utility_power=args.utility_power,
         discount_rate=args.discount_rate,
         fire_multiplier=args.fire_multiplier,
+        vitality_peak_age=args.vitality_peak,
+        vitality_half_life=args.vitality_half_life,
+        vitality_floor=1.0 if args.no_vitality else args.vitality_floor,
     )
 
     if args.optimal_leverage:
@@ -945,9 +996,12 @@ def main() -> None:
     if args.retirement_sweep > 0:
         print(f"Running retirement age sweep "
               f"({args.retirement_sweep} sims per age)...")
-        print(f"FIRE multiplier = {config.fire_multiplier}, "
-              f"U(c) = c^{config.utility_power}, "
-              f"discount = {config.discount_rate:.0%}")
+        vit_desc = (f"vitality(peak={config.vitality_peak_age}, "
+                    f"hl={config.vitality_half_life:.0f}, "
+                    f"floor={config.vitality_floor})")
+        print(f"FIRE={config.fire_multiplier}, "
+              f"U(c)=c^{config.utility_power}, "
+              f"δ={config.discount_rate:.0%}, {vit_desc}")
         print()
         sweep_results = run_retirement_sweep(
             config, spending_rule,
@@ -970,8 +1024,10 @@ def main() -> None:
         plot_monte_carlo(results, config)
     else:
         result = run_simulation(config, spending_rule, seed=args.seed)
+        vfloor = config.vitality_floor
         print(f"\n=== Lifetime Utility (U(c) = c^{config.utility_power}, "
-              f"δ={config.discount_rate:.0%}, FIRE={config.fire_multiplier}) ===")
+              f"δ={config.discount_rate:.0%}, FIRE={config.fire_multiplier}, "
+              f"vitality floor={vfloor}) ===")
         print(f"{'Portfolio':<30s}  {'Utility':>10s}  {'CE Spending':>14s}")
         print("-" * 58)
         for j, p in enumerate(result.portfolios.portfolios):
