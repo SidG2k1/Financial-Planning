@@ -51,7 +51,22 @@ class SimulationConfig:
 
     # Market return decomposition: E[stock] = bond_yield + ERP
     equity_risk_premium: float = 0.05   # 5% ERP (historical average)
-    stock_vol: float = 0.10             # 10% annualized equity volatility
+    stock_vol: float = 0.10             # 10% annualized equity volatility (long-run mean)
+
+    # Fat tails: Student-t degrees of freedom for stock return shocks
+    # df=5 gives excess kurtosis ~6 (realistic crash frequency)
+    # df=inf (or >100) reverts to normal distribution
+    stock_tail_df: float = 5.0
+
+    # Volatility clustering: log-normal stochastic volatility
+    #   log(σ_t / σ_bar) = ρ * log(σ_{t-1} / σ_bar) + η * ε_vol
+    # After a crash, vol stays elevated; in calm markets, vol is low
+    vol_persistence: float = 0.80       # AR(1) persistence of vol state
+    vol_of_vol: float = 0.25            # std of log-vol innovations
+
+    # Stock-bond correlation (discount rate channel)
+    # Negative: when bond yields spike up, stocks tend to fall
+    stock_bond_corr: float = -0.20
 
     # Real bond yield dynamics (Vasicek mean-reverting model)
     #   dr = κ(θ - r)dt + σ_r dW
@@ -140,17 +155,18 @@ def compute_optimal_leverage(config: SimulationConfig) -> float:
 def evolve_bond_yield(
     current_yield: float,
     config: SimulationConfig,
-    rng: np.random.Generator,
+    bond_shock: float,
 ) -> float:
     """Advance the real bond yield by one year using the Vasicek model.
 
     dr = κ(θ - r)dt + σ_r * dW
+    bond_shock is a standard normal draw (passed in so it can be
+    correlated with stock shocks).
     Floor at -2% to prevent unrealistic extremes.
     """
     drift = config.bond_yield_mean_reversion * (config.long_run_bond_yield - current_yield)
-    shock = config.bond_yield_vol * rng.standard_normal()
-    new_yield = current_yield + drift + shock
-    return max(new_yield, -0.02)  # Real yields can go negative but floor at -2%
+    new_yield = current_yield + drift + config.bond_yield_vol * bond_shock
+    return max(new_yield, -0.02)
 
 
 # ---------------------------------------------------------------------------
@@ -165,9 +181,14 @@ def run_simulation(
     """Run the retirement simulation and return the PortfolioManager.
 
     Market model:
-        stock_return = bond_yield + ERP + σ * ε     (ε ~ N(0,1))
-        margin_fee   = bond_yield + spread
         bond_yield follows Vasicek mean-reverting process
+        stock_return = bond_yield + ERP + σ_t * ε_stock
+        margin_fee   = bond_yield + spread
+
+    Realistic dynamics:
+        - Fat tails: ε ~ Student-t(df) normalized to unit variance
+        - Stochastic vol: log(σ_t/σ̄) = ρ·log(σ_{t-1}/σ̄) + η·ε_vol
+        - Stock-bond correlation: ε_stock = corr·ε_bond + √(1-corr²)·ε_indep
 
     Args:
         config: Simulation parameters (uses defaults if None).
@@ -187,6 +208,9 @@ def run_simulation(
         print(f"E[stock return] = bond_yield + ERP = ~{config.initial_bond_yield + config.equity_risk_premium:.1%}")
         print(f"Margin fee = bond_yield + spread = ~{config.initial_bond_yield + config.margin_spread:.1%}")
         print(f"Kelly optimal leverage: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x  |  Using: {config.leverage_ratio:.2f}x")
+        tail_desc = f"Student-t(df={config.stock_tail_df:.0f})" if config.stock_tail_df <= 100 else "Normal"
+        print(f"Return dist: {tail_desc}  |  Vol clustering: ρ={config.vol_persistence}, η={config.vol_of_vol}")
+        print(f"Stock-bond corr: {config.stock_bond_corr:+.2f}")
         print()
 
     # Build income & expense arrays sized to simulation duration
@@ -216,16 +240,45 @@ def run_simulation(
     ])
 
     bond_yield = config.initial_bond_yield
+    log_vol = 0.0  # log(σ_t / σ_bar), starts at long-run mean
+
+    df = config.stock_tail_df
+    use_fat_tails = df <= 100 and df > 2
+    # Normalization factor so Student-t shocks have unit variance
+    t_scale = np.sqrt((df - 2) / df) if use_fat_tails else 1.0
+
+    rho = config.stock_bond_corr
+    rho_complement = np.sqrt(1 - rho ** 2)
 
     for i, curr_age in enumerate(range(config.start_age, config.expected_lifespan + 1)):
-        # Evolve bond yield (Vasicek mean-reverting process)
-        bond_yield = evolve_bond_yield(bond_yield, config, rng)
+        # --- Generate correlated shocks ---
+        # Bond yield shock (always normal — Vasicek model)
+        bond_shock = rng.standard_normal()
 
-        # Stock return = bond_yield + ERP + vol * noise
-        stock_noise = rng.standard_normal()
-        year_return[0] = 1 + bond_yield + config.equity_risk_premium + config.stock_vol * stock_noise
+        # Independent stock shock (fat-tailed if configured)
+        if use_fat_tails:
+            indep_shock = rng.standard_t(df) * t_scale
+        else:
+            indep_shock = rng.standard_normal()
 
-        # Margin fee = bond_yield + broker spread
+        # Correlate: when bond yields spike, stocks tend to fall
+        stock_shock = rho * bond_shock + rho_complement * indep_shock
+
+        # Vol-of-vol shock (independent)
+        vol_shock = rng.standard_normal()
+
+        # --- Evolve stochastic volatility ---
+        log_vol = config.vol_persistence * log_vol + config.vol_of_vol * vol_shock
+        current_vol = config.stock_vol * np.exp(log_vol)
+
+        # --- Evolve bond yield (Vasicek) ---
+        bond_yield = evolve_bond_yield(bond_yield, config, bond_shock)
+
+        # --- Compute returns ---
+        # Stock return = bond_yield + ERP + σ_t * ε_stock
+        year_return[0] = 1 + bond_yield + config.equity_risk_premium + current_vol * stock_shock
+
+        # Margin fee = bond_yield + broker spread (floored at 0)
         year_margin_fee[0] = max(bond_yield + config.margin_spread, 0.0)
 
         inc = post_tax(realized_income[i], config)
@@ -239,7 +292,7 @@ def run_simulation(
 
         if not quiet:
             print(f"Age {curr_age:3d}:  bond_yield={bond_yield:+.2%}  "
-                  f"margin_fee={year_margin_fee[0]:.2%}  "
+                  f"vol={current_vol:.1%}  margin_fee={year_margin_fee[0]:.2%}  "
                   f"income={format_money(inc)}  expenses={format_money(exp)}  "
                   f"nw={portfolios.get_nw()}")
 

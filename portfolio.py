@@ -21,7 +21,7 @@ class Portfolio(ABC):
 
     def get_nw(self) -> float:
         """Return current net worth in $1,000 units."""
-        return self.nw
+        return float(self.nw)
 
     def get_nw_history(self) -> List[float]:
         """Return list of net worth values, one per year since inception."""
