@@ -243,6 +243,58 @@ class AmortizedSpending(SpendingRule):
         return regular + ctx.one_time_expense
 
 
+class VitalityAmortizedSpending(SpendingRule):
+    """Lifecycle spending weighted by vitality — spend more in high-vitality years.
+
+    Like AmortizedSpending, but replaces the flat annuity with a vitality-weighted
+    annuity: spending(age) = total_resources * v(age) / sum(v(age+s) * d^s).
+    This front-loads consumption into years when you can enjoy it most.
+    """
+
+    def compute(self, ctx: YearContext) -> float:
+        remaining = ctx.expected_lifespan - ctx.age + 1
+        if remaining <= 0:
+            return 0.0
+
+        r = max(ctx.bond_yield + ctx.equity_risk_premium, 0.001)
+        d = 1.0 / (1.0 + r)
+
+        # PV of future income (next year onward until retirement)
+        working_years_left = max(0, ctx.retirement_age - ctx.age)
+        pv_income = 0.0
+        for s in range(1, working_years_left + 1):
+            future_idx = ctx.year_idx + s
+            if future_idx < len(ctx.income_schedule):
+                gross = ctx.income_schedule[future_idx]
+            elif ctx.income_schedule:
+                gross = ctx.income_schedule[-1]
+            else:
+                gross = 0.0
+            pv_income += post_tax(gross, ctx.config) * (d ** s)
+
+        # PV of future one-time expenses (next year onward)
+        pv_onetime = 0.0
+        for future_age, amount in ctx.config.one_time_expenses.items():
+            if future_age > ctx.age:
+                pv_onetime += amount * (d ** (future_age - ctx.age))
+
+        total = (ctx.nw + ctx.income + pv_income
+                 - pv_onetime - ctx.one_time_expense)
+
+        # Vitality-weighted annuity: sum of v(age+s) * d^s for s=0..remaining-1
+        v_annuity = sum(
+            vitality_at_age(ctx.age + s, ctx.config) * (d ** s)
+            for s in range(remaining)
+        )
+
+        if v_annuity <= 0:
+            return ctx.one_time_expense
+
+        v_now = vitality_at_age(ctx.age, ctx.config)
+        regular = max(0.0, total * v_now / v_annuity)
+        return regular + ctx.one_time_expense
+
+
 # ===========================================================================
 # UTILITY MODEL: Scoring
 # ===========================================================================
@@ -775,7 +827,10 @@ def run_retirement_sweep(
             the config's fire_multiplier.
     """
     if spending_rule is None:
-        spending_rule = AmortizedSpending()
+        if config.vitality_floor < 1.0:
+            spending_rule = VitalityAmortizedSpending()
+        else:
+            spending_rule = AmortizedSpending()
     if utility_scorer_factory is None:
         def utility_scorer_factory(cfg: SimulationConfig) -> UtilityScorer:
             return CRRAUtility.from_config(cfg)
@@ -984,7 +1039,10 @@ def main() -> None:
 
     # Build spending rule (Decision Model)
     if args.amortized or args.retirement_sweep > 0:
-        spending_rule = AmortizedSpending()
+        if config.vitality_floor < 1.0:
+            spending_rule = VitalityAmortizedSpending()
+        else:
+            spending_rule = AmortizedSpending()
     else:
         spending_rule = FixedSpending(config.initial_expenses, config.lifestyle_inflation)
 
