@@ -29,17 +29,17 @@ class SimulationConfig:
     """
 
     # Personal timeline
-    start_age: int = 22
-    retirement_age: int = 65
+    start_age: int = 25
+    retirement_age: int = 37
     expected_lifespan: int = 100
 
     # Starting conditions
-    initial_net_worth: float = 40       # $40k
+    initial_net_worth: float = 500      # $500k
     lifestyle_inflation: float = 1.01   # 1% annual lifestyle creep
 
-    # Income schedule ($1,000 units per year, pre-tax)
+    # Income schedule ($1,000 units per year, pre-tax, inflation-adjusted)
     income_schedule: List[float] = field(default_factory=lambda:
-        [230] * 3 + [260] * 3 + [400] * 4 + [550] * 68)
+        [350] * 4 + [450] * 8)
 
     # Expenses
     initial_expenses: float = 60        # $60k/year
@@ -268,14 +268,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Retirement financial planning simulator'
     )
-    parser.add_argument('--start-age', type=int, default=22,
-                        help='Age to start simulation (default: 22)')
-    parser.add_argument('--retirement-age', type=int, default=65,
-                        help='Retirement age (default: 65)')
+    parser.add_argument('--start-age', type=int, default=25,
+                        help='Age to start simulation (default: 25)')
+    parser.add_argument('--retirement-age', type=int, default=37,
+                        help='Retirement age (default: 37)')
     parser.add_argument('--lifespan', type=int, default=100,
                         help='Expected lifespan (default: 100)')
-    parser.add_argument('--initial-nw', type=float, default=40,
-                        help='Initial net worth in $1,000 units (default: 40)')
+    parser.add_argument('--initial-nw', type=float, default=500,
+                        help='Initial net worth in $1,000 units (default: 500)')
     parser.add_argument('--initial-expenses', type=float, default=60,
                         help='Initial annual expenses in $1,000 units (default: 60)')
     parser.add_argument('--leverage', type=float, default=2.0,
