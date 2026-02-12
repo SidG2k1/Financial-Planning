@@ -97,6 +97,10 @@ class SimulationConfig:
     discount_rate: float = 0.03        # annual time preference δ (β = 1/(1+δ))
     fire_multiplier: float = 1.8       # utility mult for retirement years
 
+    # Spending floor: minimum annual spending ($1k). The spending rules reserve
+    # resources for this floor first, then front-load only the excess.
+    spending_floor: float = 45          # $45k/yr minimum
+
     # Social Security
     ss_enabled: bool = True
     ss_fra: int = 67                    # Full Retirement Age
@@ -344,6 +348,9 @@ class AmortizedSpending(SpendingRule):
         total_resources = NW + income + PV(future_income) + PV(SS) - PV(one_time)
         regular_spending = total_resources / annuity_factor(remaining, r)
     where r = bond_yield + ERP (expected real return, adapts to rate env).
+
+    If spending_floor > 0, resources for the floor are reserved first and
+    only the excess is annuitized on top.
     """
 
     def compute(self, ctx: YearContext) -> float:
@@ -356,7 +363,11 @@ class AmortizedSpending(SpendingRule):
         # Annuity factor: PV of $1/year for `remaining` years at rate r
         annuity = (1.0 - d ** remaining) / (1.0 - d)
 
-        regular = max(0.0, total / annuity)
+        floor = ctx.config.spending_floor
+        if floor > 0:
+            regular = max(floor, total / annuity)
+        else:
+            regular = max(0.0, total / annuity)
         return regular + ctx.one_time_expense
 
 
@@ -366,6 +377,10 @@ class VitalityAmortizedSpending(SpendingRule):
     Like AmortizedSpending, but replaces the flat annuity with a vitality-weighted
     annuity: spending(age) = total_resources * v(age) / sum(v(age+s) * d^s).
     This front-loads consumption into years when you can enjoy it most.
+
+    If spending_floor > 0, resources for the floor are reserved first
+    (PV of floor over remaining years), then the excess is front-loaded
+    via vitality weighting on top of the floor.
     """
 
     def compute(self, ctx: YearContext) -> float:
@@ -375,6 +390,8 @@ class VitalityAmortizedSpending(SpendingRule):
 
         total, d = _compute_total_resources(ctx)
 
+        floor = ctx.config.spending_floor
+
         # Vitality-weighted annuity: sum of v(age+s) * d^s for s=0..remaining-1
         v_annuity = sum(
             vitality_at_age(ctx.age + s, ctx.config) * (d ** s)
@@ -382,10 +399,19 @@ class VitalityAmortizedSpending(SpendingRule):
         )
 
         if v_annuity <= 0:
-            return ctx.one_time_expense
+            return max(floor, 0.0) + ctx.one_time_expense
 
         v_now = vitality_at_age(ctx.age, ctx.config)
-        regular = max(0.0, total * v_now / v_annuity)
+
+        if floor > 0:
+            # Reserve resources for the floor, front-load only the excess
+            flat_annuity = (1.0 - d ** remaining) / (1.0 - d)
+            pv_floor = floor * flat_annuity
+            excess = max(0.0, total - pv_floor)
+            regular = floor + excess * v_now / v_annuity
+        else:
+            regular = max(0.0, total * v_now / v_annuity)
+
         return regular + ctx.one_time_expense
 
 
@@ -1077,6 +1103,8 @@ def parse_args() -> argparse.Namespace:
                         help='Initial net worth in $1,000 units (default: 500)')
     parser.add_argument('--initial-expenses', type=float, default=60,
                         help='Initial annual expenses in $1,000 units (default: 60)')
+    parser.add_argument('--spending-floor', type=float, default=45,
+                        help='Minimum annual spending in $1,000 units (default: 45)')
     # Market model
     parser.add_argument('--erp', type=float, default=0.05,
                         help='Equity risk premium (default: 0.05)')
@@ -1140,6 +1168,7 @@ def main() -> None:
         expected_lifespan=args.lifespan,
         initial_net_worth=args.initial_nw,
         initial_expenses=args.initial_expenses,
+        spending_floor=args.spending_floor,
         equity_risk_premium=args.erp,
         stock_vol=args.stock_vol,
         initial_bond_yield=args.bond_yield,
