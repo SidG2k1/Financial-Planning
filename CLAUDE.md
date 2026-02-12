@@ -29,6 +29,12 @@ No formal test suite exists. Validate changes with:
 python retirement_math.py --retirement-sweep 200
 ```
 
+**Important:** In headless environments (CI, SSH, containers), set `MPLBACKEND=Agg` before running any script that imports matplotlib:
+```bash
+MPLBACKEND=Agg python retirement_math.py --retirement-sweep 200
+MPLBACKEND=Agg python generate_advice.py
+```
+
 ## Architecture
 
 Modular flat-file layout with three composable layers. All files live in the project root (no package directory — `python retirement_math.py` works directly).
@@ -40,7 +46,7 @@ Modular flat-file layout with three composable layers. All files live in the pro
 | `retirement_math.py` | CLI entry point: `parse_args()` + `main()` | ~200 |
 | `config.py` | `SimulationConfig`, `SimulationResult`, `post_tax`, `format_money` | ~170 |
 | `models.py` | Vitality, SS benefit, Vasicek yields, Kelly, Gompertz mortality, Bayesian sampling | ~110 |
-| `spending.py` | `YearContext`, `SpendingRule` ABC, `FixedSpending`, `AmortizedSpending`, `VitalityAmortizedSpending` | ~170 |
+| `spending.py` | `YearContext`, `SpendingRule` ABC, `FixedSpending`, `AmortizedSpending`, `VitalityAmortizedSpending`, `MarginalUtilitySpending` | ~230 |
 | `utility.py` | `UtilityScorer` ABC, `CRRAUtility` | ~80 |
 | `simulator.py` | `run_simulation`, `_build_income_schedule`, `_generate_year_shocks` | ~200 |
 | `sweeps.py` | `run_monte_carlo`, `run_leverage_sweep`, `run_retirement_sweep`, `run_2d_sweep`, CRN/antithetic helpers | ~400 |
@@ -76,7 +82,8 @@ retirement_math.py   (imports all — thin CLI layer)
 2. **Decision Model** (`spending.py`) — Spending rules determining annual consumption:
    - `FixedSpending` — base expenses + lifestyle inflation
    - `AmortizedSpending` — lifecycle annuity over remaining life
-   - `VitalityAmortizedSpending` — vitality-weighted annuity that front-loads high-energy years, with a spending floor ($45k) reserving resources for old age
+   - `VitalityAmortizedSpending` — vitality-weighted annuity (legacy heuristic, c ∝ vitality)
+   - `MarginalUtilitySpending` — **default**: Euler equation-optimal allocation that equalizes marginal utility per PV-dollar across ages. Uses `c_t ∝ (w_t / d^t)^γ` where `w_t = β^t · vitality · fire_mult` and `γ = 1/(1-α)` is the EIS. Spending floor reserves PV of minimum spending, then optimally allocates the excess.
 
 3. **Utility Model** (`utility.py`) — CRRA power utility: `V = Σ β^t · vitality(age) · fire_mult · c^α`, scored via `CRRAUtility`. Certainty equivalent converts stochastic utility into constant annual spending.
 
@@ -95,7 +102,7 @@ retirement_math.py   (imports all — thin CLI layer)
 
 - **Vitality**: `v(age) = floor + (1-floor) * exp(-((age-peak)/half_life)^2)` — Gaussian health decay from peak (~30), floor 0.3
 - **FIRE Multiplier**: Extra utility during retirement (default 1.8x) — higher values pull optimal retirement earlier
-- **Spending Floor**: Reserves PV of minimum annual spending ($30k) before front-loading excess via vitality weighting
+- **Spending Floor**: Reserves PV of minimum annual spending ($30k) before optimally allocating excess via marginal utility equalization
 - **Retirement Tax Advantage**: 1.25x multiplier reflecting LTCG/Roth (~15%) vs earned income (~38%) tax rates
 - **Kelly Optimal Leverage**: `L* = (ERP - spread) / σ²`
 - **Margin Calls**: `LeveragedStockPortfolio` triggers forced liquidation when equity drops below `maintenance_margin` (default 25%), reducing leverage for a 2-year cooldown

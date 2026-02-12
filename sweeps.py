@@ -14,6 +14,7 @@ from simulator import run_simulation
 from spending import (
     AmortizedSpending,
     FixedSpending,
+    MarginalUtilitySpending,
     SpendingRule,
     VitalityAmortizedSpending,
 )
@@ -261,7 +262,7 @@ def run_retirement_sweep(
     """
     if spending_rule is None:
         if config.vitality_floor < 1.0:
-            spending_rule = VitalityAmortizedSpending()
+            spending_rule = MarginalUtilitySpending()
         else:
             spending_rule = AmortizedSpending()
     if utility_scorer_factory is None:
@@ -379,7 +380,7 @@ def run_2d_sweep(
     """Sweep two parameters, return 2D grid of metric values."""
     if spending_rule is None:
         if config.vitality_floor < 1.0:
-            spending_rule = VitalityAmortizedSpending()
+            spending_rule = MarginalUtilitySpending()
         else:
             spending_rule = AmortizedSpending()
 

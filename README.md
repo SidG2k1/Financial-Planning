@@ -11,7 +11,7 @@ Heavily inspired by the principles of Ben Felix.
 The simulator has three composable layers:
 
 1. **Financial Model** — stochastic market simulation (Vasicek bond yields, equity returns with fat tails, stochastic volatility, stock-bond correlation)
-2. **Decision Model** — spending rules that determine how much to consume each year (fixed, lifecycle amortized, or vitality-weighted amortized)
+2. **Decision Model** — spending rules that determine how much to consume each year (fixed, lifecycle amortized, or marginal utility-optimal)
 3. **Utility Model** — CRRA power utility with FIRE multiplier and vitality weighting, used to score and compare outcomes
 
 ## Example Output
@@ -74,7 +74,7 @@ Retirement years are worth more than working years (freedom, autonomy). The FIRE
 SS benefits are computed from the full formula (AIME over top 35 earning years, PIA bend points, FRA adjustment). **FIRE reduces SS** — retiring after 12 years of work yields ~$18k/yr vs ~$32k/yr for 35+ years. The spending rules include PV of future SS when planning.
 
 ### Spending Floor
-The vitality-weighted rule can front-load spending aggressively, leaving little for old age (especially with leveraged portfolios). The spending floor reserves resources for a guaranteed minimum: `spending = floor + excess * v(age) / v_annuity`. Default $30k/yr.
+The marginal utility-optimal rule can front-load spending aggressively toward high-utility years. The spending floor reserves PV of a guaranteed minimum, then the excess is allocated via Euler equation optimization: `c_t ∝ (w_t / d^t)^γ` where `γ = 1/(1-α)`. Default floor $30k/yr.
 
 ### Retirement Tax Advantage
 Retirement withdrawals (LTCG at ~15%, Roth at 0%) are taxed much less than earned income (~38%). The `retirement_tax_advantage` multiplier (default 1.25x) inflates the real purchasing power of portfolio wealth after retirement.
@@ -97,7 +97,7 @@ Runs N simulations, plots net worth trajectories with confidence bands for each 
 ```bash
 python retirement_math.py --retirement-sweep 500
 ```
-The main optimization mode. Sweeps retirement ages from 30-70, runs N sims per age, and plots certainty-equivalent (CE) spending vs retirement age. Automatically uses vitality-weighted amortized spending. Shows the optimal retirement age per portfolio type.
+The main optimization mode. Sweeps retirement ages from 30-70, runs N sims per age, and plots certainty-equivalent (CE) spending vs retirement age. Automatically uses marginal utility-optimal spending. Shows the optimal retirement age per portfolio type.
 
 ### Leverage Sweep
 ```bash
@@ -295,7 +295,7 @@ All flat files in the project root (no package — `python retirement_math.py` w
 | `retirement_math.py` | CLI entry point (`parse_args` + `main`) |
 | `config.py` | `SimulationConfig`, `SimulationResult`, tax/formatting helpers |
 | `models.py` | Vitality, Social Security, Vasicek yields, Kelly, Gompertz, Bayesian sampling |
-| `spending.py` | `SpendingRule` ABC, `FixedSpending`, `AmortizedSpending`, `VitalityAmortizedSpending` |
+| `spending.py` | `SpendingRule` ABC, `FixedSpending`, `AmortizedSpending`, `VitalityAmortizedSpending`, `MarginalUtilitySpending` |
 | `utility.py` | `UtilityScorer` ABC, `CRRAUtility` |
 | `simulator.py` | `run_simulation` — the core financial model |
 | `sweeps.py` | Monte Carlo, leverage sweep, retirement sweep, 2D sweep |

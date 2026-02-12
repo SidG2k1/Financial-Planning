@@ -15,6 +15,7 @@ from simulator import run_simulation
 from spending import (
     AmortizedSpending,
     FixedSpending,
+    MarginalUtilitySpending,
     VitalityAmortizedSpending,
 )
 from sweeps import (
@@ -63,7 +64,7 @@ def fmt_u(u: float) -> str:
 # -----------------------------------------------------------------------
 print("\n[1/7] Running retirement age sweep (300 sims/age)...")
 
-spending_rule = VitalityAmortizedSpending()
+spending_rule = MarginalUtilitySpending()
 ret_results = run_retirement_sweep(config, spending_rule, n_simulations=300)
 
 # Find optimal age per portfolio (by max mean utility — monotonic with CE)
@@ -105,7 +106,7 @@ ax2.set_title('Certainty Equivalent (for reference)')
 ax2.legend(fontsize=8)
 ax2.grid(True, alpha=0.3)
 
-fig.suptitle('Retirement Age Optimization (Vitality-Weighted Amortized Spending)')
+fig.suptitle('Retirement Age Optimization (Marginal Utility-Optimal Spending)')
 plt.tight_layout()
 fig.savefig(os.path.join(ASSETS, '1_retirement_sweep.png'), dpi=150, bbox_inches='tight')
 plt.close(fig)
@@ -122,7 +123,7 @@ for name, data in ret_results.items():
 # -----------------------------------------------------------------------
 print("\n[2/7] Running leverage sweep (300 sims/level)...")
 
-lev_spending = VitalityAmortizedSpending()
+lev_spending = MarginalUtilitySpending()
 scorer = CRRAUtility.from_config(config)
 lev_results = run_leverage_sweep(config, lev_spending, scorer,
                                   leverage_range=[1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.5, 4.0],
@@ -230,14 +231,14 @@ sweep_2d = run_2d_sweep(
     config,
     'retirement_age', [float(a) for a in range(30, 71, 10)],
     'leverage_ratio', list(np.linspace(1.0, 4.0, 7)),
-    spending_rule=VitalityAmortizedSpending(),
+    spending_rule=MarginalUtilitySpending(),
     n_simulations=20,
     metric='mean_utility',
     portfolio_idx=2,
 )
 
 print("\n  Running Adam optimizer...")
-adam_path = adam_optimize(config, VitalityAmortizedSpending(), n_sims=100, steps=25)
+adam_path = adam_optimize(config, MarginalUtilitySpending(), n_sims=100, steps=25)
 
 X, Y = np.meshgrid(sweep_2d['param2_range'], sweep_2d['param1_range'])
 grid = sweep_2d['grid']
@@ -327,7 +328,7 @@ print(f"\n  Adam optimum: retire@{int(round(final_ret))}, leverage={final_lev:.1
 # 4. Monte Carlo at optimal retirement age — all portfolios
 # -----------------------------------------------------------------------
 opt_retire = ret_results.get('LeveragedStockPortfolio', {}).get('optimal_age', 42)
-mc_spending = VitalityAmortizedSpending()
+mc_spending = MarginalUtilitySpending()
 
 print(f"\n[4/7] Monte Carlo at retire@{opt_retire} (300 sims)...")
 
@@ -374,7 +375,7 @@ for col, (name, data) in enumerate(show_portfolios.items()):
     if col == 0:
         ax_sp.set_ylabel('Annual Spending ($k/yr)')
 
-fig.suptitle(f'Monte Carlo: Retire@{opt_retire}, Vitality-Weighted Spending', fontsize=13)
+fig.suptitle(f'Monte Carlo: Retire@{opt_retire}, MU-Optimal Spending', fontsize=13)
 plt.tight_layout()
 fig.savefig(os.path.join(ASSETS, '4_monte_carlo.png'), dpi=150, bbox_inches='tight')
 plt.close(fig)
@@ -484,7 +485,7 @@ plt.close(fig)
 print("\n[7/7] Running E[U] distributions across leverage levels (300 sims each)...")
 
 pdf_leverages = [1.0, 1.5, 2.0, 3.0, 4.0]
-pdf_spending = VitalityAmortizedSpending()
+pdf_spending = MarginalUtilitySpending()
 pdf_seeds = _generate_seeds(300)
 
 leverage_utilities = {}

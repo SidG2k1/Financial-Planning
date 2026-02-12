@@ -19,6 +19,7 @@ from simulator import run_simulation
 from spending import (
     AmortizedSpending,
     FixedSpending,
+    MarginalUtilitySpending,
     VitalityAmortizedSpending,
 )
 from sweeps import (
@@ -203,7 +204,7 @@ def main() -> None:
     # Build spending rule (Decision Model)
     if args.amortized or args.retirement_sweep > 0 or args.sweep_2d:
         if config.vitality_floor < 1.0:
-            spending_rule = VitalityAmortizedSpending()
+            spending_rule = MarginalUtilitySpending()
         else:
             spending_rule = AmortizedSpending()
     else:
