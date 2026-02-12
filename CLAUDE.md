@@ -22,6 +22,9 @@ python retirement_math.py --retirement-sweep 500
 
 # Optimal leverage analysis
 python retirement_math.py --leverage-sweep 500
+
+# Compare leverage instruments (futures vs box spreads)
+python retirement_math.py --instrument-sweep 500
 ```
 
 No formal test suite exists. Validate changes with:
@@ -44,14 +47,14 @@ Modular flat-file layout with three composable layers. All files live in the pro
 | File | Purpose | Lines |
 |------|---------|-------|
 | `retirement_math.py` | CLI entry point: `parse_args()` + `main()` | ~200 |
-| `config.py` | `SimulationConfig`, `SimulationResult`, `post_tax`, `format_money` | ~170 |
+| `config.py` | `SimulationConfig`, `SimulationResult`, `post_tax`, `format_money` | ~250 |
 | `models.py` | Vitality, SS benefit, Vasicek yields, Kelly, Gompertz mortality, Bayesian sampling | ~110 |
 | `spending.py` | `YearContext`, `SpendingRule` ABC, `FixedSpending`, `AmortizedSpending`, `VitalityAmortizedSpending`, `MarginalUtilitySpending` | ~230 |
 | `utility.py` | `UtilityScorer` ABC, `CRRAUtility` | ~80 |
 | `simulator.py` | `run_simulation`, `_build_income_schedule`, `_generate_year_shocks` | ~200 |
-| `sweeps.py` | `run_monte_carlo`, `run_leverage_sweep`, `run_retirement_sweep`, `run_2d_sweep`, CRN/antithetic helpers | ~400 |
-| `plotting.py` | All `plot_*` functions (lazy matplotlib import) | ~200 |
-| `portfolio.py` | `Portfolio` ABC, `CashPortfolio`, `StockPortfolio`, `LeveragedStockPortfolio`, `PortfolioManager` | ~150 |
+| `sweeps.py` | `run_monte_carlo`, `run_leverage_sweep`, `run_retirement_sweep`, `run_2d_sweep`, `run_instrument_comparison`, CRN/antithetic helpers | ~470 |
+| `plotting.py` | All `plot_*` functions incl. `plot_instrument_comparison` (lazy matplotlib import) | ~310 |
+| `portfolio.py` | `Portfolio` ABC, `CashPortfolio`, `StockPortfolio`, `LeveragedStockPortfolio` (instrument-aware), `PortfolioManager` | ~210 |
 
 ### Dependency Graph (no circular imports)
 
@@ -104,7 +107,11 @@ retirement_math.py   (imports all — thin CLI layer)
 - **FIRE Multiplier**: Extra utility during retirement (default 1.8x) — higher values pull optimal retirement earlier
 - **Spending Floor**: Reserves PV of minimum annual spending ($30k) before optimally allocating excess via marginal utility equalization
 - **Retirement Tax Advantage**: 1.25x multiplier reflecting LTCG/Roth (~15%) vs earned income (~38%) tax rates
-- **Kelly Optimal Leverage**: `L* = (ERP - spread) / σ²`
+- **Leverage Instruments**: Three modes for `LeveragedStockPortfolio` (selected via `--leverage-instrument`):
+  - `generic` — borrowing cost only, no tax drag (default, backward-compatible)
+  - `futures` — Section 1256 mark-to-market: annual tax on gains (~26.8% blended 60/40 rate), low financing spread (20bps), quarterly roll cost (10bps/yr). Loss carryforward not modeled (conservative).
+  - `box_spread` — box spread + ETF: capital gains deferred, annual dividend tax drag (`leverage × div_yield × div_tax_rate`), higher financing spread (40bps), crisis spread widening (+100bps when stock excess return < -10%)
+- **Kelly Optimal Leverage**: `L* = (ERP - spread) / σ²` — spread is instrument-aware (futures uses financing_spread + roll_cost, box_spread uses financing_spread)
 - **Margin Calls**: `LeveragedStockPortfolio` triggers forced liquidation when equity drops below `maintenance_margin` (default 25%), reducing leverage for a 2-year cooldown
 - **Stochastic Lifespan**: Gompertz mortality `h(age) = a·exp(b·age)` — spending rules still plan for `expected_lifespan`, but simulation terminates at sampled death age (longevity risk)
 - **Stochastic Income**: Market-correlated job loss `P(loss) = base · exp(sensitivity · max(0, -excess_return))` — income shocks during working years
@@ -112,6 +119,7 @@ retirement_math.py   (imports all — thin CLI layer)
 - **Antithetic Variates**: Variance reduction by running each seed with both normal and negated shocks, averaging utilities
 - **Common Random Numbers (CRN)**: Pre-generated seed lists reused across parameter values in all sweeps for smoother comparisons
 - **2D Parameter Sweep**: Generic engine sweeping any two `SimulationConfig` fields with contour visualization. `generate_advice.py` uses a two-pass approach: coarse grid to locate the approximate maximum, then a merged refined grid with 2x resolution per axis near the optimum (+/- 5y age, +/- 1x leverage)
+- **Instrument Comparison Sweep**: `--instrument-sweep N` runs leverage sweeps for generic, futures, and box_spread instruments side-by-side using CRN for fair comparison
 
 ## Maintenance Rules
 

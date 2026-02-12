@@ -123,6 +123,16 @@ def run_simulation(
         print(f"Return dist: {tail_desc}  |  Vol clustering: rho={config.vol_persistence}, eta={config.vol_of_vol}")
         print(f"Stock-bond corr: {config.stock_bond_corr:+.2f}")
         print(f"Spending: {type(spending_rule).__name__}")
+        if config.leverage_instrument != 'generic':
+            inst = config.leverage_instrument
+            if inst == 'futures':
+                print(f"Leverage instrument: futures (tax={config.futures_tax_rate:.1%}, "
+                      f"spread={config.futures_financing_spread:.2%}, "
+                      f"roll={config.futures_roll_cost:.2%})")
+            elif inst == 'box_spread':
+                print(f"Leverage instrument: box_spread (div_tax={config.box_div_tax_rate:.1%}, "
+                      f"spread={config.box_spread_financing_spread:.2%}, "
+                      f"div_yield={config.box_div_yield:.2%})")
         if config.ss_enabled:
             print(f"SS benefit: {format_money(ss_benefit)}/yr "
                   f"(claiming@{config.ss_claiming_age}, "
@@ -148,6 +158,8 @@ def run_simulation(
     # Mutable containers for closures shared with portfolio objects
     year_return = [1.0]
     year_margin_fee = [0.0]
+    year_lev_margin_fee = [0.0]
+    year_stock_excess_return = [0.0]
 
     def real_mkt_return() -> float:
         return year_return[0]
@@ -155,14 +167,43 @@ def run_simulation(
     def margin_fee() -> float:
         return year_margin_fee[0]
 
+    def lev_margin_fee() -> float:
+        return year_lev_margin_fee[0]
+
+    def stock_excess_return() -> float:
+        return year_stock_excess_return[0]
+
+    # Instrument-specific margin spread and params for leveraged portfolio
+    if config.leverage_instrument == 'futures':
+        lev_margin_spread = config.futures_financing_spread
+        instrument_params = {
+            'tax_rate': config.futures_tax_rate,
+            'roll_cost': config.futures_roll_cost,
+        }
+    elif config.leverage_instrument == 'box_spread':
+        lev_margin_spread = config.box_spread_financing_spread
+        instrument_params = {
+            'financing_spread': config.box_spread_financing_spread,
+            'div_yield': config.box_div_yield,
+            'div_tax_rate': config.box_div_tax_rate,
+            'crisis_spread_widening': config.box_crisis_spread_widening,
+            'crisis_threshold': config.box_crisis_threshold,
+        }
+    else:
+        lev_margin_spread = config.margin_spread
+        instrument_params = {}
+
     portfolios = PortfolioManager([
         CashPortfolio(config.initial_net_worth),
         StockPortfolio(config.initial_net_worth, real_mkt_return),
         LeveragedStockPortfolio(
             config.initial_net_worth, config.leverage_ratio,
-            real_mkt_return, margin_fee,
+            real_mkt_return, lev_margin_fee,
             maintenance_margin=config.maintenance_margin,
             margin_call_leverage=config.margin_call_leverage,
+            instrument=config.leverage_instrument,
+            instrument_params=instrument_params,
+            stock_excess_return_func=stock_excess_return,
         ),
     ])
     n_portfolios = len(portfolios.portfolios)
@@ -193,6 +234,8 @@ def run_simulation(
         # --- Compute returns ---
         year_return[0] = 1 + bond_yield + config.equity_risk_premium + current_vol * shocks.stock
         year_margin_fee[0] = max(bond_yield + config.margin_spread, 0.0)
+        year_lev_margin_fee[0] = max(bond_yield + lev_margin_spread, 0.0)
+        year_stock_excess_return[0] = (year_return[0] - 1) - (bond_yield + config.equity_risk_premium)
 
         # Stochastic income: market-correlated job loss
         if config.stochastic_income and curr_age < config.retirement_age:

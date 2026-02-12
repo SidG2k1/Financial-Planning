@@ -99,8 +99,18 @@ def compute_ss_benefit(config: SimulationConfig,
 
 
 def compute_optimal_leverage(config: SimulationConfig) -> float:
-    """Compute Kelly-optimal leverage: L* = (ERP - spread) / sigma^2."""
-    excess = config.equity_risk_premium - config.margin_spread
+    """Compute Kelly-optimal leverage: L* = (ERP - spread) / sigma^2.
+
+    Uses instrument-specific spread: futures includes roll cost,
+    box_spread uses its financing spread, generic uses margin_spread.
+    """
+    if config.leverage_instrument == 'futures':
+        spread = config.futures_financing_spread + config.futures_roll_cost
+    elif config.leverage_instrument == 'box_spread':
+        spread = config.box_spread_financing_spread
+    else:
+        spread = config.margin_spread
+    excess = config.equity_risk_premium - spread
     if excess <= 0:
         return 1.0
     return excess / config.stock_vol ** 2

@@ -241,3 +241,72 @@ def plot_2d_sweep(sweep: Dict, config: SimulationConfig) -> None:
                  f'{sweep["param2_range"][opt_idx[1]]:.2f}')
     plt.tight_layout()
     plt.show()
+
+
+def plot_instrument_comparison(
+    results: Dict[str, Dict],
+    config: SimulationConfig,
+) -> None:
+    """Plot instrument comparison: CE, ruin %, and E[U] vs leverage for each instrument."""
+    plt = _get_plt()
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
+
+    colors = {'generic': 'gray', 'futures': '#2196F3', 'box_spread': '#4CAF50'}
+    labels = {'generic': 'Generic', 'futures': 'Futures (1256)',
+              'box_spread': 'Box Spread + ETF'}
+
+    for inst_name, sweep in results.items():
+        levs = sweep['leverage']
+        c = colors.get(inst_name, 'black')
+        lbl = labels.get(inst_name, inst_name)
+
+        # Panel 1: CE vs leverage
+        ces = [ce * 1000 for ce in sweep['mean_ce']]
+        ax1.plot(levs, ces, 'o-', color=c, linewidth=2,
+                 label=lbl, markersize=4)
+
+        # Panel 2: Ruin probability
+        ax2.plot(levs, [r * 100 for r in sweep['ruin_pct']], 'o-', color=c,
+                 linewidth=2, label=lbl, markersize=4)
+
+        # Panel 3: E[U]
+        ax3.plot(levs, sweep['mean_utility'], 'o-', color=c,
+                 linewidth=2, label=lbl, markersize=4)
+
+    ax1.set_xlabel('Leverage Ratio')
+    ax1.set_ylabel('Certainty Equivalent ($k/yr)')
+    ax1.set_title('CE vs Leverage by Instrument')
+    ax1.legend(fontsize=8)
+    ax1.grid(True, alpha=0.3)
+
+    ax2.set_xlabel('Leverage Ratio')
+    ax2.set_ylabel('Ruin Probability (%)')
+    ax2.set_title('Ruin Risk vs Leverage')
+    ax2.set_ylim(bottom=0)
+    ax2.axhline(y=5, color='orange', linestyle='--', alpha=0.7, label='5% threshold')
+    ax2.legend(fontsize=8)
+    ax2.grid(True, alpha=0.3)
+
+    ax3.set_xlabel('Leverage Ratio')
+    ax3.set_ylabel('E[U] (Total Lifetime Utility)')
+    ax3.set_title(f'Expected Utility (U=c^{config.utility_power})')
+    ax3.legend(fontsize=8)
+    ax3.grid(True, alpha=0.3)
+
+    fig.suptitle(f'Leverage Instrument Comparison (retire@{config.retirement_age}, '
+                 f'age {config.start_age}-{config.expected_lifespan})')
+    plt.tight_layout()
+    plt.show()
+
+    # Summary table
+    print(f"\n=== Instrument Comparison Summary ===")
+    print(f"{'Instrument':<20s}  {'Best Lev':>8s}  {'E[U]':>10s}  {'CE':>14s}  {'Ruin':>6s}")
+    print("-" * 64)
+    for inst_name, sweep in results.items():
+        best_idx = int(np.argmax(sweep['mean_utility']))
+        lbl = labels.get(inst_name, inst_name)
+        print(f"{lbl:<20s}  {sweep['leverage'][best_idx]:>7.2f}x  "
+              f"{sweep['mean_utility'][best_idx]:>10,.1f}  "
+              f"({format_money(sweep['mean_ce'][best_idx])}/yr)  "
+              f"{sweep['ruin_pct'][best_idx]:>5.1%}")
+    print()

@@ -104,13 +104,22 @@ class LeveragedStockPortfolio(Portfolio):
     If maintenance_margin > 0, a margin call is triggered when equity drops
     below the maintenance threshold, forcing partial liquidation and reducing
     leverage for a cooldown period.
+
+    Supports three leverage instruments via the `instrument` parameter:
+    - 'generic': current behavior (no tax drag)
+    - 'futures': Section 1256 mark-to-market annual tax on gains
+    - 'box_spread': tax-deferred cap gains, annual dividend tax, crisis spread widening
     """
 
     def __init__(self, init_nw: float, leverage: float,
                  real_mkt_return_func: Callable[[], float],
                  margin_fee_func: Callable[[], float],
                  maintenance_margin: float = 0.25,
-                 margin_call_leverage: float = 1.0) -> None:
+                 margin_call_leverage: float = 1.0,
+                 instrument: str = 'generic',
+                 instrument_params: dict | None = None,
+                 stock_excess_return_func: Callable[[], float] | None = None,
+                 ) -> None:
         super().__init__(init_nw)
         if leverage < 1:
             raise ValueError(f"Leverage must be >= 1, got {leverage}")
@@ -119,17 +128,61 @@ class LeveragedStockPortfolio(Portfolio):
         self.margin_fee_func = margin_fee_func
         self.maintenance_margin = maintenance_margin
         self.margin_call_leverage = margin_call_leverage
+        self.instrument = instrument
+        self.instrument_params = instrument_params or {}
+        self.stock_excess_return_func = stock_excess_return_func
         self.effective_leverage = leverage
         self.margin_call_count = 0
         self._margin_call_cooldown = 0
 
+    def _compute_new_nw(self, raw_return: float, lev: float) -> float:
+        """Compute post-return, post-cost, post-tax NW based on instrument type."""
+        margin_fee = self.margin_fee_func()
+
+        if self.instrument == 'futures':
+            # Futures: lower financing cost, but annual mark-to-market tax on gains.
+            # Loss carryforward is NOT modeled (conservative for futures).
+            fees = (lev - 1) * margin_fee
+            roll_cost = self.instrument_params.get('roll_cost', 0.001)
+            pre_tax_nw = self.nw * ((raw_return - 1) * lev + 1 - fees - roll_cost)
+            gain = pre_tax_nw - self.nw
+            if gain > 0:
+                tax = gain * self.instrument_params.get('tax_rate', 0.268)
+                return pre_tax_nw - tax
+            return pre_tax_nw
+
+        elif self.instrument == 'box_spread':
+            # Box spread + ETF: tax-deferred capital gains, annual dividend tax,
+            # crisis spread widening on borrowing cost.
+            base_spread = self.instrument_params.get('financing_spread', 0.004)
+            crisis_threshold = self.instrument_params.get('crisis_threshold', -0.10)
+            crisis_widening = self.instrument_params.get('crisis_spread_widening', 0.01)
+
+            # Widen spread during crises (correlated with drawdowns)
+            stock_excess = (self.stock_excess_return_func()
+                           if self.stock_excess_return_func else 0.0)
+            extra = crisis_widening if stock_excess < crisis_threshold else 0.0
+            adj_margin_fee = margin_fee + extra
+
+            fees = (lev - 1) * adj_margin_fee
+
+            # Dividend tax drag: dividends across full leveraged position
+            div_yield = self.instrument_params.get('div_yield', 0.013)
+            div_tax_rate = self.instrument_params.get('div_tax_rate', 0.238)
+            div_tax_drag = lev * div_yield * div_tax_rate
+
+            return self.nw * ((raw_return - 1) * lev + 1 - fees - div_tax_drag)
+
+        else:
+            # Generic: current behavior
+            fees = (lev - 1) * margin_fee
+            return self.nw * ((raw_return - 1) * lev + 1 - fees)
+
     def pass_year(self) -> None:
         """Apply leveraged market returns minus borrowing costs and record."""
         raw_return = self.real_mkt_return_func()
-        margin_fee = self.margin_fee_func()
         lev = self.effective_leverage
-        fees = (lev - 1) * margin_fee
-        new_nw = self.nw * ((raw_return - 1) * lev + 1 - fees)
+        new_nw = self._compute_new_nw(raw_return, lev)
 
         # Margin call: check equity-to-gross-assets ratio.
         # debt = starting_equity * (leverage - 1), unchanged by market move.

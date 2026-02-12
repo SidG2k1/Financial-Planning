@@ -1,4 +1,5 @@
-# Sweep engines: Monte Carlo, leverage sweep, retirement sweep, 2D sweep
+# Sweep engines: Monte Carlo, leverage sweep, retirement sweep, 2D sweep,
+# instrument comparison
 # All monetary values are in $1,000 units (2023 USD)
 
 from __future__ import annotations
@@ -435,3 +436,48 @@ def run_2d_sweep(
         'param2': param2, 'param2_range': param2_range,
         'grid': grid, 'metric': metric,
     }
+
+
+# ---------------------------------------------------------------------------
+# Instrument Comparison
+# ---------------------------------------------------------------------------
+
+INSTRUMENT_NAMES = ['generic', 'futures', 'box_spread']
+
+
+def run_instrument_comparison(
+    config: SimulationConfig,
+    spending_rule: SpendingRule | None = None,
+    utility_scorer: UtilityScorer | None = None,
+    n_simulations: int = 500,
+    leverage_range: List[float] | None = None,
+) -> Dict[str, Dict]:
+    """Compare leverage instruments across leverage levels using CRN.
+
+    Runs a leverage sweep for each instrument type (generic, futures, box_spread)
+    with the same random seeds for fair comparison.
+
+    Returns dict keyed by instrument name, each containing leverage sweep results.
+    """
+    if spending_rule is None:
+        if config.vitality_floor < 1.0:
+            spending_rule = MarginalUtilitySpending()
+        else:
+            spending_rule = AmortizedSpending()
+    if utility_scorer is None:
+        utility_scorer = CRRAUtility.from_config(config)
+
+    results: Dict[str, Dict] = {}
+
+    for inst in INSTRUMENT_NAMES:
+        print(f"\n--- Instrument: {inst} ---")
+        cfg = replace(config, leverage_instrument=inst)
+        scorer = CRRAUtility.from_config(cfg)
+        sweep = run_leverage_sweep(
+            cfg, spending_rule, scorer,
+            leverage_range=leverage_range,
+            n_simulations=n_simulations,
+        )
+        results[inst] = sweep
+
+    return results
