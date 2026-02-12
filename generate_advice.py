@@ -370,10 +370,11 @@ for col, (name, data) in enumerate(show_portfolios.items()):
     ax_sp.axvline(x=opt_retire, color='r', linestyle='--', alpha=0.5)
     ax_sp.axhline(y=config.spending_floor, color='gray', linestyle=':', alpha=0.5,
                    label=f'Floor ${config.spending_floor:.0f}k')
+    ax_sp.set_yscale('symlog', linthresh=10)
     ax_sp.set_xlabel('Age')
     ax_sp.legend(fontsize=7)
     if col == 0:
-        ax_sp.set_ylabel('Annual Spending ($k/yr)')
+        ax_sp.set_ylabel('Annual Spending ($k/yr, log scale)')
 
 fig.suptitle(f'Monte Carlo: Retire@{opt_retire}, MU-Optimal Spending', fontsize=13)
 plt.tight_layout()
