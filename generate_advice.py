@@ -23,7 +23,6 @@ from sweeps import (
     _run_sim_batch,
     _score_utility,
     run_leverage_sweep,
-    evaluate_point,
     run_monte_carlo,
     run_retirement_sweep,
     run_2d_sweep,
@@ -187,58 +186,54 @@ print(f"  Kelly optimal: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x")
 # 3. 2D Sweep: retirement age vs leverage — joint optimization
 # -----------------------------------------------------------------------
 
-def adam_optimize(cfg, spending_rule, n_sims=100, steps=25, lr=2.0,
-                  beta1=0.9, beta2=0.999, eps=1e-8):
-    """Adam optimizer over (retirement_age, leverage) via finite-difference gradients."""
-    seeds = _generate_seeds(n_sims)
-    ret, lev = 50.0, 2.0  # start near center
-    m = np.zeros(2)
-    v = np.zeros(2)
-    path = []
-    h_ret, h_lev = 2.0, 0.2
+print("\n[3/7] Running 2D sweep (15 sims/point, two-pass refinement)...")
 
-    for t in range(1, steps + 1):
-        u_ret_p = evaluate_point(cfg, ret + h_ret, lev, spending_rule, seeds)
-        u_ret_m = evaluate_point(cfg, ret - h_ret, lev, spending_rule, seeds)
-        u_lev_p = evaluate_point(cfg, ret, lev + h_lev, spending_rule, seeds)
-        u_lev_m = evaluate_point(cfg, ret, lev - h_lev, spending_rule, seeds)
+# Pass 1: coarse grid
+coarse_ages = [float(a) for a in range(30, 71, 10)]
+coarse_levs = list(np.linspace(1.0, 4.0, 7))
 
-        grad = np.array([
-            (u_ret_p - u_ret_m) / (2 * h_ret),
-            (u_lev_p - u_lev_m) / (2 * h_lev),
-        ])
-
-        m = beta1 * m + (1 - beta1) * grad
-        v = beta2 * v + (1 - beta2) * grad**2
-        m_hat = m / (1 - beta1**t)
-        v_hat = v / (1 - beta2**t)
-
-        ret += lr * m_hat[0] / (np.sqrt(v_hat[0]) + eps)
-        lev += lr * m_hat[1] / (np.sqrt(v_hat[1]) + eps)
-        ret = float(np.clip(ret, 30, 70))
-        lev = float(np.clip(lev, 1.0, 4.0))
-
-        u_cur = evaluate_point(cfg, ret, lev, spending_rule, seeds)
-        path.append((ret, lev, u_cur))
-        print(f"    Adam step {t:2d}: retire@{ret:.1f}, lev={lev:.2f}x, E[U]={u_cur:.1f}")
-
-    return path
-
-
-print("\n[3/7] Running 2D sweep (20 sims/point) + Adam optimizer (100 sims/eval)...")
-
-sweep_2d = run_2d_sweep(
+print("  Pass 1: coarse grid (5x7)...")
+coarse_2d = run_2d_sweep(
     config,
-    'retirement_age', [float(a) for a in range(30, 71, 10)],
-    'leverage_ratio', list(np.linspace(1.0, 4.0, 7)),
+    'retirement_age', coarse_ages,
+    'leverage_ratio', coarse_levs,
     spending_rule=MarginalUtilitySpending(),
-    n_simulations=20,
+    n_simulations=15,
     metric='mean_utility',
     portfolio_idx=2,
 )
 
-print("\n  Running Adam optimizer...")
-adam_path = adam_optimize(config, MarginalUtilitySpending(), n_sims=100, steps=25)
+# Find coarse optimum
+coarse_grid = coarse_2d['grid']
+coarse_opt_idx = np.unravel_index(np.argmax(coarse_grid), coarse_grid.shape)
+coarse_opt_age = coarse_ages[coarse_opt_idx[0]]
+coarse_opt_lev = coarse_levs[coarse_opt_idx[1]]
+print(f"  Coarse optimum: retire@{int(coarse_opt_age)}, leverage={coarse_opt_lev:.1f}x, "
+      f"E[U]={coarse_grid[coarse_opt_idx]:.1f}")
+
+# Build refined ranges: 2x resolution (step=5 age, step=0.25 lev) near optimum
+fine_age_lo = max(30.0, coarse_opt_age - 5)
+fine_age_hi = min(70.0, coarse_opt_age + 5)
+fine_ages = [float(a) for a in range(int(fine_age_lo), int(fine_age_hi) + 1, 5)]
+
+fine_lev_lo = max(1.0, coarse_opt_lev - 1.0)
+fine_lev_hi = min(4.0, coarse_opt_lev + 1.0)
+fine_levs = list(np.arange(fine_lev_lo, fine_lev_hi + 0.01, 0.25))
+
+merged_ages = sorted(set(coarse_ages + fine_ages))
+merged_levs = sorted(set([round(l, 4) for l in coarse_levs + fine_levs]))
+
+# Pass 2: merged refined grid
+print(f"  Pass 2: merged grid ({len(merged_ages)}x{len(merged_levs)})...")
+sweep_2d = run_2d_sweep(
+    config,
+    'retirement_age', merged_ages,
+    'leverage_ratio', merged_levs,
+    spending_rule=MarginalUtilitySpending(),
+    n_simulations=15,
+    metric='mean_utility',
+    portfolio_idx=2,
+)
 
 X, Y = np.meshgrid(sweep_2d['param2_range'], sweep_2d['param1_range'])
 grid = sweep_2d['grid']
@@ -255,36 +250,17 @@ opt_ret = sweep_2d['param1_range'][opt_idx[0]]
 opt_lev = sweep_2d['param2_range'][opt_idx[1]]
 grid_u = grid[opt_idx]
 ax.plot(opt_lev, opt_ret, 'w*', markersize=15, markeredgecolor='black',
-        label=f'Grid optimum ({int(opt_ret)}, {opt_lev:.1f}x)')
+        label=f'Grid optimum ({int(opt_ret)}, {opt_lev:.2f}x)')
 ax.annotate(f'E[U]={grid_u:.0f}', xy=(opt_lev, opt_ret),
             fontsize=8, color='white', fontweight='bold',
             xytext=(-10, -15), textcoords='offset points', ha='right')
-
-# Adam path
-path_lev = [p[1] for p in adam_path]
-path_ret = [p[0] for p in adam_path]
-ax.plot(path_lev, path_ret, '-o', color='white', markersize=4, linewidth=2,
-        markeredgecolor='black', markeredgewidth=0.5, label='Adam path')
-ax.annotate('start', xy=(path_lev[0], path_ret[0]), fontsize=8, color='white',
-            fontweight='bold', xytext=(8, 5), textcoords='offset points')
-for i in range(4, len(adam_path), 5):
-    ax.annotate(str(i + 1), xy=(path_lev[i], path_ret[i]),
-                fontsize=7, color='white', fontweight='bold',
-                ha='center', va='bottom', xytext=(0, 5), textcoords='offset points')
-# Final point
-final_ret, final_lev, final_u = adam_path[-1]
-ax.plot(final_lev, final_ret, '*', color='cyan', markersize=15, markeredgecolor='black',
-        label=f'Adam optimum ({int(round(final_ret))}, {final_lev:.1f}x)')
-ax.annotate(f'E[U]={final_u:.0f}', xy=(final_lev, final_ret),
-            fontsize=8, color='cyan', fontweight='bold',
-            xytext=(8, -12), textcoords='offset points')
 
 fig.colorbar(cf, label='E[U] (Total Lifetime Utility)')
 ax.set_xlabel('Leverage Ratio')
 ax.set_ylabel('Retirement Age')
 ax.set_title(f'Joint Optimization: Retirement Age vs Leverage\n'
-             f'Adam optimum: retire@{int(round(final_ret))}, {final_lev:.1f}x leverage, '
-             f'E[U]={fmt_u(final_u)}')
+             f'Grid optimum: retire@{int(opt_ret)}, {opt_lev:.2f}x leverage, '
+             f'E[U]={fmt_u(grid_u)}')
 ax.legend(loc='lower right', fontsize=8)
 plt.tight_layout()
 fig.savefig(os.path.join(ASSETS, '3_2d_retirement_leverage.png'), dpi=150, bbox_inches='tight')
@@ -297,13 +273,6 @@ fig3d = plt.figure(figsize=(12, 8))
 ax3d = fig3d.add_subplot(111, projection='3d')
 surf = ax3d.plot_surface(X, Y, grid, cmap='RdYlGn', alpha=0.85,
                          edgecolor='black', linewidth=0.2)
-# Adam path on surface
-path_u = [p[2] for p in adam_path]
-ax3d.plot(path_lev, path_ret, path_u, '-o', color='blue', markersize=3,
-          linewidth=2, zorder=10, label='Adam path')
-ax3d.scatter([final_lev], [final_ret], [final_u], color='cyan', s=120,
-             marker='*', edgecolors='black', zorder=11,
-             label=f'Adam opt (E[U]={final_u:.0f})')
 ax3d.scatter([opt_lev], [opt_ret], [grid_u], color='white', s=120,
              marker='*', edgecolors='black', zorder=11,
              label=f'Grid opt (E[U]={grid_u:.0f})')
@@ -312,38 +281,50 @@ ax3d.set_xlabel('Leverage Ratio')
 ax3d.set_ylabel('Retirement Age')
 ax3d.set_zlabel('E[U]')
 ax3d.set_title(f'3D Utility Surface: Retirement Age vs Leverage\n'
-               f'Adam optimum: retire@{int(round(final_ret))}, {final_lev:.1f}x, '
-               f'E[U]={fmt_u(final_u)}')
+               f'Grid optimum: retire@{int(opt_ret)}, {opt_lev:.2f}x, '
+               f'E[U]={fmt_u(grid_u)}')
 ax3d.legend(loc='upper left', fontsize=8)
 ax3d.view_init(elev=25, azim=-50)
 plt.tight_layout()
 fig3d.savefig(os.path.join(ASSETS, '3a_3d_retirement_leverage.png'), dpi=150, bbox_inches='tight')
 plt.close(fig3d)
 
-print(f"\n  Adam optimum: retire@{int(round(final_ret))}, leverage={final_lev:.1f}x, "
-      f"E[U]={fmt_u(final_u)}")
+print(f"\n  2D grid optimum: retire@{int(opt_ret)}, leverage={opt_lev:.2f}x, "
+      f"E[U]={fmt_u(grid_u)}")
 
 
 # -----------------------------------------------------------------------
-# 4. Monte Carlo at optimal retirement age — all portfolios
+# 4. Monte Carlo — stock-optimal vs leveraged-optimal comparison
 # -----------------------------------------------------------------------
-opt_retire = ret_results.get('LeveragedStockPortfolio', {}).get('optimal_age', 42)
 mc_spending = MarginalUtilitySpending()
 
-print(f"\n[4/7] Monte Carlo at retire@{opt_retire} (300 sims)...")
+# Scenario A: Stocks at stock-optimal retirement age
+stock_opt_ret = ret_results.get('StockPortfolio', {}).get('optimal_age', 42)
+# Scenario B: Leveraged at jointly-optimized retirement age + leverage
+lev_opt_ret = int(opt_ret)
+lev_opt_lev = opt_lev
 
-mc_config = replace(config, retirement_age=opt_retire)
-mc_scorer = CRRAUtility.from_config(mc_config)
-mc_results = run_monte_carlo(mc_config, mc_spending, mc_scorer, n_simulations=300)
+print(f"\n[4/7] Monte Carlo: Stocks@{stock_opt_ret} vs Leveraged@{lev_opt_ret},{lev_opt_lev:.2f}x (300 sims each)...")
 
-# Filter out CashPortfolio (goes broke at early retirement — not a serious strategy)
-show_portfolios = {k: v for k, v in mc_results.items() if k != 'CashPortfolio'}
-n_show = len(show_portfolios)
-fig, axes = plt.subplots(2, n_show, figsize=(6 * n_show, 9))
-if n_show == 1:
-    axes = axes.reshape(2, 1)
+mc_config_stock = replace(config, retirement_age=stock_opt_ret)
+mc_scorer_stock = CRRAUtility.from_config(mc_config_stock)
+mc_results_stock = run_monte_carlo(mc_config_stock, mc_spending, mc_scorer_stock, n_simulations=300)
 
-for col, (name, data) in enumerate(show_portfolios.items()):
+mc_config_lev = replace(config, retirement_age=lev_opt_ret, leverage_ratio=lev_opt_lev)
+mc_scorer_lev = CRRAUtility.from_config(mc_config_lev)
+mc_results_lev = run_monte_carlo(mc_config_lev, mc_spending, mc_scorer_lev, n_simulations=300)
+
+# Build comparison: each strategy at its own optimal
+scenarios = [
+    (f'StockPortfolio\n(Retire@{stock_opt_ret})',
+     mc_results_stock['StockPortfolio'], stock_opt_ret),
+    (f'LeveragedStockPortfolio\n(Retire@{lev_opt_ret}, {lev_opt_lev:.2f}x)',
+     mc_results_lev['LeveragedStockPortfolio'], lev_opt_ret),
+]
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+
+for col, (label, data, ret_age) in enumerate(scenarios):
     ages = data['ages']
     u = data.get('mean_utility', 0)
     ce = data.get('mean_ce', 0)
@@ -353,10 +334,11 @@ for col, (name, data) in enumerate(show_portfolios.items()):
     ax_nw.fill_between(ages, data['p10'], data['p90'], alpha=0.15, label='10th-90th %ile')
     ax_nw.fill_between(ages, data['p25'], data['p75'], alpha=0.3, label='25th-75th %ile')
     ax_nw.plot(ages, data['median'], linewidth=2, label='Median')
-    ax_nw.axvline(x=opt_retire, color='r', linestyle='--', alpha=0.5)
+    ax_nw.axvline(x=ret_age, color='r', linestyle='--', alpha=0.5)
     ax_nw.set_yscale('symlog', linthresh=100)
-    ax_nw.set_title(f'{name}\nE[U]={fmt_u(u)}  (CE={format_money(ce)}/yr)')
+    ax_nw.set_title(f'{label}\nE[U]={fmt_u(u)}  (CE={format_money(ce)}/yr)')
     ax_nw.legend(fontsize=7)
+    ax_nw.grid(True, alpha=0.2, axis='y')
     if col == 0:
         ax_nw.set_ylabel('Net Worth ($M, log scale)')
 
@@ -367,45 +349,60 @@ for col, (name, data) in enumerate(show_portfolios.items()):
     ax_sp.fill_between(ages, data['spend_p25'], data['spend_p75'],
                         alpha=0.3, label='25th-75th %ile')
     ax_sp.plot(ages, data['spend_median'], linewidth=2, label='Median')
-    ax_sp.axvline(x=opt_retire, color='r', linestyle='--', alpha=0.5)
+    ax_sp.axvline(x=ret_age, color='r', linestyle='--', alpha=0.5)
     ax_sp.axhline(y=config.spending_floor, color='gray', linestyle=':', alpha=0.5,
                    label=f'Floor ${config.spending_floor:.0f}k')
     ax_sp.set_yscale('symlog', linthresh=100)
     ax_sp.set_xlabel('Age')
     ax_sp.legend(fontsize=7)
+    ax_sp.grid(True, alpha=0.2, axis='y')
     if col == 0:
         ax_sp.set_ylabel('Annual Spending ($k/yr, log scale)')
 
-fig.suptitle(f'Monte Carlo: Retire@{opt_retire}, MU-Optimal Spending', fontsize=13)
+fig.suptitle(f'Monte Carlo: Stocks (Retire@{stock_opt_ret}) vs '
+             f'Leveraged (Retire@{lev_opt_ret}, {lev_opt_lev:.2f}x)', fontsize=13)
 plt.tight_layout()
 fig.savefig(os.path.join(ASSETS, '4_monte_carlo.png'), dpi=150, bbox_inches='tight')
 plt.close(fig)
 
+# Combine results for summary printing and downstream use
+mc_results = {**mc_results_stock, **mc_results_lev}
+
 print("\n  === Monte Carlo Summary ===")
-print(f"  {'Portfolio':<28s}  {'E[U]':>10s}  {'CE':>14s}")
-print(f"  {'-'*56}")
-for name, data in mc_results.items():
-    print(f"  {name:<28s}  {fmt_u(data['mean_utility']):>10s}  "
-          f"({format_money(data['mean_ce'])}/yr)")
+d_stock = mc_results_stock['StockPortfolio']
+d_lev = mc_results_lev['LeveragedStockPortfolio']
+print(f"  StockPortfolio@{str(stock_opt_ret):<14s}  E[U]={fmt_u(d_stock['mean_utility']):>10s}  "
+      f"(CE={format_money(d_stock['mean_ce'])}/yr)")
+print(f"  LeveragedStock@{lev_opt_ret},{lev_opt_lev:.2f}x  "
+      f"E[U]={fmt_u(d_lev['mean_utility']):>10s}  "
+      f"(CE={format_money(d_lev['mean_ce'])}/yr)")
 
 
 # -----------------------------------------------------------------------
 # 5. Stress test: Bayesian + stochastic lifespan/income
 # -----------------------------------------------------------------------
-print(f"\n[5/7] Stress test: + stochastic lifespan (300 sims)...")
+print(f"\n[5/7] Stress test: + stochastic lifespan (300 sims each)...")
 
-stress_config = replace(mc_config,
-                        stochastic_lifespan=True)
-stress_scorer = CRRAUtility.from_config(stress_config)
-stress_results = run_monte_carlo(stress_config, mc_spending, stress_scorer, n_simulations=300)
+stress_config_stock = replace(mc_config_stock, stochastic_lifespan=True)
+stress_scorer_stock = CRRAUtility.from_config(stress_config_stock)
+stress_results_stock = run_monte_carlo(stress_config_stock, mc_spending,
+                                       stress_scorer_stock, n_simulations=300)
 
-stress_show = {k: v for k, v in stress_results.items() if k != 'CashPortfolio'}
-n_stress_show = len(stress_show)
-fig, axes = plt.subplots(2, n_stress_show, figsize=(6 * n_stress_show, 9))
-if n_stress_show == 1:
-    axes = axes.reshape(2, 1)
+stress_config_lev = replace(mc_config_lev, stochastic_lifespan=True)
+stress_scorer_lev = CRRAUtility.from_config(stress_config_lev)
+stress_results_lev = run_monte_carlo(stress_config_lev, mc_spending,
+                                     stress_scorer_lev, n_simulations=300)
 
-for col, (name, data) in enumerate(stress_show.items()):
+stress_scenarios = [
+    (f'StockPortfolio\n(Retire@{stock_opt_ret})',
+     stress_results_stock['StockPortfolio'], stock_opt_ret),
+    (f'LeveragedStockPortfolio\n(Retire@{lev_opt_ret}, {lev_opt_lev:.2f}x)',
+     stress_results_lev['LeveragedStockPortfolio'], lev_opt_ret),
+]
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+
+for col, (label, data, ret_age) in enumerate(stress_scenarios):
     ages = data['ages']
     u = data.get('mean_utility', 0)
     ce = data.get('mean_ce', 0)
@@ -415,10 +412,11 @@ for col, (name, data) in enumerate(stress_show.items()):
     ax_nw.fill_between(ages, data['p10'], data['p90'], alpha=0.15, label='10th-90th %ile')
     ax_nw.fill_between(ages, data['p25'], data['p75'], alpha=0.3, label='25th-75th %ile')
     ax_nw.plot(ages, data['median'], linewidth=2, label='Median')
-    ax_nw.axvline(x=opt_retire, color='r', linestyle='--', alpha=0.5)
+    ax_nw.axvline(x=ret_age, color='r', linestyle='--', alpha=0.5)
     ax_nw.set_yscale('symlog', linthresh=100)
-    ax_nw.set_title(f'{name}\nE[U]={fmt_u(u)}  (CE={format_money(ce)}/yr)')
+    ax_nw.set_title(f'{label}\nE[U]={fmt_u(u)}  (CE={format_money(ce)}/yr)')
     ax_nw.legend(fontsize=7)
+    ax_nw.grid(True, alpha=0.2, axis='y')
     if col == 0:
         ax_nw.set_ylabel('Net Worth ($M, log scale)')
 
@@ -429,26 +427,32 @@ for col, (name, data) in enumerate(stress_show.items()):
     ax_sp.fill_between(ages, data['spend_p25'], data['spend_p75'],
                         alpha=0.3, label='25th-75th %ile')
     ax_sp.plot(ages, data['spend_median'], linewidth=2, label='Median')
-    ax_sp.axvline(x=opt_retire, color='r', linestyle='--', alpha=0.5)
-    ax_sp.axhline(y=stress_config.spending_floor, color='gray', linestyle=':',
-                   alpha=0.5, label=f'Floor ${stress_config.spending_floor:.0f}k')
+    ax_sp.axvline(x=ret_age, color='r', linestyle='--', alpha=0.5)
+    ax_sp.axhline(y=config.spending_floor, color='gray', linestyle=':',
+                   alpha=0.5, label=f'Floor ${config.spending_floor:.0f}k')
     ax_sp.set_xlabel('Age')
     ax_sp.legend(fontsize=7)
+    ax_sp.grid(True, alpha=0.2, axis='y')
     if col == 0:
         ax_sp.set_ylabel('Annual Spending ($k/yr)')
 
-fig.suptitle(f'Stress Test: Retire@{opt_retire} + Stochastic Lifespan (Longevity Risk)',
+fig.suptitle(f'Stress Test: Stocks (Retire@{stock_opt_ret}) vs '
+             f'Leveraged (Retire@{lev_opt_ret}, {lev_opt_lev:.2f}x) + Stochastic Lifespan',
              fontsize=13)
 plt.tight_layout()
 fig.savefig(os.path.join(ASSETS, '5_stress_test.png'), dpi=150, bbox_inches='tight')
 plt.close(fig)
 
+stress_results = {**stress_results_stock, **stress_results_lev}
+
 print("\n  === Stress Test Summary ===")
-print(f"  {'Portfolio':<28s}  {'E[U]':>10s}  {'CE':>14s}")
-print(f"  {'-'*56}")
-for name, data in stress_results.items():
-    print(f"  {name:<28s}  {fmt_u(data['mean_utility']):>10s}  "
-          f"({format_money(data['mean_ce'])}/yr)")
+d_stock_st = stress_results_stock['StockPortfolio']
+d_lev_st = stress_results_lev['LeveragedStockPortfolio']
+print(f"  StockPortfolio@{str(stock_opt_ret):<14s}  E[U]={fmt_u(d_stock_st['mean_utility']):>10s}  "
+      f"(CE={format_money(d_stock_st['mean_ce'])}/yr)")
+print(f"  LeveragedStock@{lev_opt_ret},{lev_opt_lev:.2f}x  "
+      f"E[U]={fmt_u(d_lev_st['mean_utility']):>10s}  "
+      f"(CE={format_money(d_lev_st['mean_ce'])}/yr)")
 
 
 # -----------------------------------------------------------------------
@@ -488,6 +492,7 @@ print("\n[7/7] Running E[U] distributions across leverage levels (300 sims each)
 pdf_leverages = [1.0, 1.5, 2.0, 3.0, 4.0]
 pdf_spending = MarginalUtilitySpending()
 pdf_seeds = _generate_seeds(300)
+mc_config = mc_config_lev  # use leveraged-optimal retirement age for PDF comparison
 
 leverage_utilities = {}
 for lev in pdf_leverages:
@@ -547,7 +552,7 @@ ax2.set_ylabel('Lifetime E[U]')
 ax2.set_title(f'Utility Distribution (capped at P95={U_CAP:.0f})')
 ax2.grid(True, alpha=0.3, axis='y')
 
-fig.suptitle(f'Lifetime Utility PDF by Leverage (Retire@{opt_retire}, Leveraged Portfolio)',
+fig.suptitle(f'Lifetime Utility PDF by Leverage (Retire@{lev_opt_ret}, Leveraged Portfolio)',
              fontsize=13)
 plt.tight_layout()
 fig.savefig(os.path.join(ASSETS, '7_utility_pdf_by_leverage.png'), dpi=150, bbox_inches='tight')
@@ -582,19 +587,20 @@ print(f"""
     Kelly optimal: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x
     Utility-maximizing: {best_lev:.2f}x  E[U]={fmt_u(best_u)}  (CE={format_money(best_ce)}/yr)  ruin={best_ruin:.1%}
 
-  JOINT OPTIMUM (Adam optimizer)
-    Retire @ {int(round(final_ret))}, leverage {final_lev:.1f}x  ->  E[U]={fmt_u(final_u)}
+  JOINT OPTIMUM (2D grid, two-pass refinement)
+    Retire @ {int(opt_ret)}, leverage {opt_lev:.2f}x  ->  E[U]={fmt_u(grid_u)}
 
-  MONTE CARLO @ RETIRE@{opt_retire} (Leveraged Portfolio)
-    {'':24s}  {'E[U]':>10s}  {'CE':>14s}
-    {'-'*52}""")
-pf_name = 'LeveragedStockPortfolio'
-d_mc = mc_results[pf_name]
-d_st = stress_results[pf_name]
-print(f"    Base:                {fmt_u(d_mc['mean_utility']):>10s}  "
-      f"({format_money(d_mc['mean_ce'])}/yr)")
-print(f"    Stress:              {fmt_u(d_st['mean_utility']):>10s}  "
-      f"({format_money(d_st['mean_ce'])}/yr)")
+  MONTE CARLO COMPARISON
+    {'':36s}  {'E[U]':>10s}  {'CE':>14s}
+    {'-'*64}""")
+print(f"    Stock@{stock_opt_ret} (base):             "
+      f"{fmt_u(d_stock['mean_utility']):>10s}  ({format_money(d_stock['mean_ce'])}/yr)")
+print(f"    Stock@{stock_opt_ret} (stress):           "
+      f"{fmt_u(d_stock_st['mean_utility']):>10s}  ({format_money(d_stock_st['mean_ce'])}/yr)")
+print(f"    Leveraged@{lev_opt_ret},{lev_opt_lev:.2f}x (base):    "
+      f"{fmt_u(d_lev['mean_utility']):>10s}  ({format_money(d_lev['mean_ce'])}/yr)")
+print(f"    Leveraged@{lev_opt_ret},{lev_opt_lev:.2f}x (stress):  "
+      f"{fmt_u(d_lev_st['mean_utility']):>10s}  ({format_money(d_lev_st['mean_ce'])}/yr)")
 
 print(f"""
   KEY ASSUMPTIONS
@@ -607,8 +613,8 @@ print(f"""
     1_retirement_sweep.png       — E[U] vs retirement age per portfolio
     2_leverage_sweep.png         — NW, ruin risk, and E[U] vs leverage
     3_2d_retirement_leverage.png — contour: E[U] over retirement age x leverage
-    4_monte_carlo.png            — Monte Carlo at retire@{opt_retire} (all portfolios)
-    5_stress_test.png            — Stress test at retire@{opt_retire} (+ stochastic lifespan)
+    4_monte_carlo.png            — Stocks@{stock_opt_ret} vs Leveraged@{lev_opt_ret},{lev_opt_lev:.2f}x
+    5_stress_test.png            — Same comparison + stochastic lifespan
     6_vitality_curve.png         — the vitality function driving spending allocation
     7_utility_pdf_by_leverage.png — PDF of lifetime E[U] across leverage levels
 """)

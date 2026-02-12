@@ -111,7 +111,7 @@ retirement_math.py   (imports all — thin CLI layer)
 - **Bayesian Parameter Uncertainty**: Per-simulation sampling of ERP, vol, bond yield from posteriors — captures estimation risk on top of market risk
 - **Antithetic Variates**: Variance reduction by running each seed with both normal and negated shocks, averaging utilities
 - **Common Random Numbers (CRN)**: Pre-generated seed lists reused across parameter values in all sweeps for smoother comparisons
-- **2D Parameter Sweep**: Generic engine sweeping any two `SimulationConfig` fields with contour visualization
+- **2D Parameter Sweep**: Generic engine sweeping any two `SimulationConfig` fields with contour visualization. `generate_advice.py` uses a two-pass approach: coarse grid to locate the approximate maximum, then a merged refined grid with 2x resolution per axis near the optimum (+/- 5y age, +/- 1x leverage)
 
 ## Maintenance Rules
 

@@ -35,7 +35,7 @@ def load_env(env_path: str | None = None) -> Dict:
 
     overrides: Dict = {}
 
-    _int_keys = {'RETIREMENT_AGE': 'retirement_age'}
+    _int_keys = {'RETIREMENT_AGE': 'retirement_age', 'START_AGE': 'start_age'}
     _float_keys = {
         'INITIAL_NET_WORTH': 'initial_net_worth',
         'INITIAL_EXPENSES': 'initial_expenses',
