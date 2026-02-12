@@ -35,7 +35,7 @@ class SimulationConfig:
     # Personal timeline
     start_age: int = 25
     retirement_age: int = 37
-    expected_lifespan: int = 100
+    expected_lifespan: int = 90
 
     # Starting conditions
     initial_net_worth: float = 500      # $500k
@@ -97,6 +97,19 @@ class SimulationConfig:
     discount_rate: float = 0.03        # annual time preference δ (β = 1/(1+δ))
     fire_multiplier: float = 1.0       # utility mult for retirement years (1.5 = FIRE)
 
+    # Social Security
+    ss_enabled: bool = True
+    ss_fra: int = 67                    # Full Retirement Age
+    ss_claiming_age: int = 67           # When to start claiming (62-70)
+    ss_taxable_max: float = 169         # $169k SS taxable earnings cap ($1k units)
+
+    # Retirement tax advantage: retirement withdrawals are taxed at lower rates
+    # (LTCG ~15%) than earned income (~38%). This multiplier inflates the real
+    # value of each dollar withdrawn in retirement.
+    # Default 1.25 ≈ (1-0.15)/(1-0.38) — a $1 withdrawal buys 25% more than
+    # $1 of earned income after tax.
+    retirement_tax_advantage: float = 1.25
+
     # Vitality curve: v(age) = floor + (1-floor)*exp(-((age-peak)/half_life)^2)
     # Captures declining health/energy/capacity to enjoy spending with age.
     # Based on QALY literature: ~1.0 at 30, ~0.80 at 50, ~0.55 at 65, ~0.4 at 80.
@@ -153,6 +166,80 @@ def vitality_at_age(age: int, config: SimulationConfig) -> float:
     return config.vitality_floor + (1.0 - config.vitality_floor) * np.exp(-(x * x))
 
 
+def compute_ss_benefit(config: SimulationConfig,
+                       retirement_age: int | None = None) -> float:
+    """Compute annual post-tax SS benefit ($1k units) given work history.
+
+    Uses 2024 SS bend points. FIRE reduces SS because fewer working years
+    means lower AIME (average of top 35 years, zeros fill missing years).
+
+    Args:
+        retirement_age: Override for config.retirement_age (used in sweeps).
+
+    Returns:
+        Annual post-tax SS benefit in $1k units. 0.0 if ss_enabled is False.
+    """
+    if not config.ss_enabled:
+        return 0.0
+
+    ret_age = retirement_age if retirement_age is not None else config.retirement_age
+    working_years = max(0, ret_age - config.start_age)
+
+    # Collect capped earnings for each working year
+    schedule = config.income_schedule
+    earnings: List[float] = []
+    for i in range(working_years):
+        if i < len(schedule):
+            gross = schedule[i]
+        elif schedule:
+            gross = schedule[-1]
+        else:
+            gross = 0.0
+        earnings.append(min(gross, config.ss_taxable_max))
+
+    # Top 35 years (zeros fill if fewer than 35 working years)
+    earnings.sort(reverse=True)
+    top_35 = (earnings[:35] + [0.0] * 35)[:35]
+
+    # AIME: Average Indexed Monthly Earnings ($1k/month)
+    aime = sum(top_35) / (35 * 12)
+
+    # PIA bend points (2024, in $1k/month): $1.174k and $7.078k
+    b1, b2 = 1.174, 7.078
+    if aime <= b1:
+        pia = 0.90 * aime
+    elif aime <= b2:
+        pia = 0.90 * b1 + 0.32 * (aime - b1)
+    else:
+        pia = 0.90 * b1 + 0.32 * (b2 - b1) + 0.15 * (aime - b2)
+
+    annual_pia = pia * 12  # $1k/year
+
+    # Adjust for claiming age vs FRA
+    claim = config.ss_claiming_age
+    fra = config.ss_fra
+    if claim < fra:
+        months_early = (fra - claim) * 12
+        # 5/9 of 1% per month for first 36 months, then 5/12 of 1%
+        if months_early <= 36:
+            reduction = months_early * (5.0 / 9.0) / 100.0
+        else:
+            reduction = (36 * (5.0 / 9.0) + (months_early - 36) * (5.0 / 12.0)) / 100.0
+        annual_pia *= (1.0 - reduction)
+    elif claim > fra:
+        # Delayed retirement credits: 8% per year past FRA
+        annual_pia *= (1.0 + 0.08 * (claim - fra))
+
+    # Tax: 85% of SS is taxable for high earners; apply progressive tax to that
+    # For FIRE retirees with low other income, effective rate is modest.
+    taxable_portion = 0.85 * annual_pia
+    tax = annual_pia - post_tax(taxable_portion, config) if taxable_portion > 0 else 0.0
+    # But only 85% was taxable, so actual tax = tax on the taxable portion
+    net_ss = annual_pia - tax
+
+    return max(0.0, net_ss)
+
+
 # ===========================================================================
 # DECISION MODEL: Spending Rules
 # ===========================================================================
@@ -161,7 +248,7 @@ def vitality_at_age(age: int, config: SimulationConfig) -> float:
 class YearContext:
     """All info a spending rule needs for one year's decision."""
     nw: float               # portfolio NW after returns
-    income: float           # post-tax income this year ($1k)
+    income: float           # post-tax income this year ($1k), includes SS if applicable
     age: int
     retirement_age: int
     expected_lifespan: int
@@ -172,6 +259,7 @@ class YearContext:
     year_idx: int           # 0-based sim year index
     start_age: int
     config: SimulationConfig
+    ss_benefit: float = 0.0 # annual post-tax SS benefit ($1k), for PV calc
 
 
 class SpendingRule(ABC):
@@ -196,11 +284,64 @@ class FixedSpending(SpendingRule):
         return base + ctx.one_time_expense
 
 
+def _compute_total_resources(ctx: YearContext) -> Tuple[float, float]:
+    """Compute total lifetime resources and discount factor for spending rules.
+
+    Returns (total_resources, d) where:
+        total = NW * tax_advantage + income + PV(future_income) + PV(SS)
+                - PV(future_one_time) - one_time_this_year
+
+    The retirement_tax_advantage inflates the real purchasing power of
+    portfolio NW (retirement withdrawals face ~15% LTCG vs ~38% earned income).
+    """
+    remaining = ctx.expected_lifespan - ctx.age + 1
+    r = max(ctx.bond_yield + ctx.equity_risk_premium, 0.001)
+    d = 1.0 / (1.0 + r)
+
+    # PV of future earned income (next year onward until retirement)
+    working_years_left = max(0, ctx.retirement_age - ctx.age)
+    pv_income = 0.0
+    for s in range(1, working_years_left + 1):
+        future_idx = ctx.year_idx + s
+        if future_idx < len(ctx.income_schedule):
+            gross = ctx.income_schedule[future_idx]
+        elif ctx.income_schedule:
+            gross = ctx.income_schedule[-1]
+        else:
+            gross = 0.0
+        pv_income += post_tax(gross, ctx.config) * (d ** s)
+
+    # PV of future SS income
+    pv_ss = 0.0
+    if ctx.ss_benefit > 0:
+        ss_start = ctx.config.ss_claiming_age
+        for future_age in range(max(ss_start, ctx.age + 1),
+                                ctx.expected_lifespan + 1):
+            pv_ss += ctx.ss_benefit * (d ** (future_age - ctx.age))
+
+    # PV of future one-time expenses (next year onward)
+    pv_onetime = 0.0
+    for future_age, amount in ctx.config.one_time_expenses.items():
+        if future_age > ctx.age:
+            pv_onetime += amount * (d ** (future_age - ctx.age))
+
+    # Retirement tax advantage: portfolio NW buys more in retirement because
+    # withdrawals (LTCG/Roth) are taxed at ~15% vs earned income at ~38%.
+    # Only apply after retirement when spending comes from portfolio.
+    is_retired = ctx.age >= ctx.retirement_age
+    tax_adv = ctx.config.retirement_tax_advantage if is_retired else 1.0
+
+    total = (ctx.nw * tax_adv + ctx.income + pv_income + pv_ss
+             - pv_onetime - ctx.one_time_expense)
+
+    return total, d
+
+
 class AmortizedSpending(SpendingRule):
     """Lifecycle spending: annuitize total resources over remaining lifespan.
 
     Each year recomputes sustainable spending based on:
-        total_resources = NW + income + PV(future_income) - PV(future_one_time)
+        total_resources = NW + income + PV(future_income) + PV(SS) - PV(one_time)
         regular_spending = total_resources / annuity_factor(remaining, r)
     where r = bond_yield + ERP (expected real return, adapts to rate env).
     """
@@ -210,31 +351,7 @@ class AmortizedSpending(SpendingRule):
         if remaining <= 0:
             return 0.0
 
-        r = max(ctx.bond_yield + ctx.equity_risk_premium, 0.001)
-
-        # PV of future income (next year onward until retirement)
-        working_years_left = max(0, ctx.retirement_age - ctx.age)
-        d = 1.0 / (1.0 + r)
-        pv_income = 0.0
-        for s in range(1, working_years_left + 1):
-            future_idx = ctx.year_idx + s
-            if future_idx < len(ctx.income_schedule):
-                gross = ctx.income_schedule[future_idx]
-            elif ctx.income_schedule:
-                gross = ctx.income_schedule[-1]
-            else:
-                gross = 0.0
-            pv_income += post_tax(gross, ctx.config) * (d ** s)
-
-        # PV of future one-time expenses (next year onward)
-        pv_onetime = 0.0
-        for future_age, amount in ctx.config.one_time_expenses.items():
-            if future_age > ctx.age:
-                pv_onetime += amount * (d ** (future_age - ctx.age))
-
-        # Total resources for regular spending
-        total = (ctx.nw + ctx.income + pv_income
-                 - pv_onetime - ctx.one_time_expense)
+        total, d = _compute_total_resources(ctx)
 
         # Annuity factor: PV of $1/year for `remaining` years at rate r
         annuity = (1.0 - d ** remaining) / (1.0 - d)
@@ -256,30 +373,7 @@ class VitalityAmortizedSpending(SpendingRule):
         if remaining <= 0:
             return 0.0
 
-        r = max(ctx.bond_yield + ctx.equity_risk_premium, 0.001)
-        d = 1.0 / (1.0 + r)
-
-        # PV of future income (next year onward until retirement)
-        working_years_left = max(0, ctx.retirement_age - ctx.age)
-        pv_income = 0.0
-        for s in range(1, working_years_left + 1):
-            future_idx = ctx.year_idx + s
-            if future_idx < len(ctx.income_schedule):
-                gross = ctx.income_schedule[future_idx]
-            elif ctx.income_schedule:
-                gross = ctx.income_schedule[-1]
-            else:
-                gross = 0.0
-            pv_income += post_tax(gross, ctx.config) * (d ** s)
-
-        # PV of future one-time expenses (next year onward)
-        pv_onetime = 0.0
-        for future_age, amount in ctx.config.one_time_expenses.items():
-            if future_age > ctx.age:
-                pv_onetime += amount * (d ** (future_age - ctx.age))
-
-        total = (ctx.nw + ctx.income + pv_income
-                 - pv_onetime - ctx.one_time_expense)
+        total, d = _compute_total_resources(ctx)
 
         # Vitality-weighted annuity: sum of v(age+s) * d^s for s=0..remaining-1
         v_annuity = sum(
@@ -476,10 +570,18 @@ def run_simulation(
         print(f"Return dist: {tail_desc}  |  Vol clustering: ρ={config.vol_persistence}, η={config.vol_of_vol}")
         print(f"Stock-bond corr: {config.stock_bond_corr:+.2f}")
         print(f"Spending: {type(spending_rule).__name__}")
+        if config.ss_enabled:
+            print(f"SS benefit: {format_money(ss_benefit)}/yr "
+                  f"(claiming@{config.ss_claiming_age}, "
+                  f"{config.retirement_age - config.start_age} working yrs)")
+        print(f"Retirement tax advantage: {config.retirement_tax_advantage:.0%}")
         print()
 
     sim_years = config.expected_lifespan - config.start_age + 1
     realized_income, extended_schedule = _build_income_schedule(config)
+
+    # SS benefit (depends on retirement_age — fewer working years = lower benefit)
+    ss_benefit = compute_ss_benefit(config)
 
     # Mutable containers for closures shared with portfolio objects
     year_return = [1.0]
@@ -534,6 +636,9 @@ def run_simulation(
         year_margin_fee[0] = max(bond_yield + config.margin_spread, 0.0)
 
         inc = post_tax(realized_income[i], config)
+        # Add SS income once past claiming age
+        if curr_age >= config.ss_claiming_age and ss_benefit > 0:
+            inc += ss_benefit
         one_time = config.one_time_expenses.get(curr_age, 0.0)
 
         portfolios.pass_year()
@@ -549,6 +654,7 @@ def run_simulation(
                 one_time_expense=one_time,
                 income_schedule=extended_schedule,
                 year_idx=i, start_age=config.start_age, config=config,
+                ss_benefit=ss_benefit,
             )
             target = spending_rule.compute(ctx)
             available = p.get_nw() + inc
@@ -911,8 +1017,10 @@ def plot_retirement_sweep(
     ax1.set_xlabel('Retirement Age')
     ax1.set_ylabel('E[CE] Spending ($k/yr)')
     vf = config.vitality_floor
+    ss_lbl = f"SS@{config.ss_claiming_age}" if config.ss_enabled else "no SS"
     ax1.set_title(f'Optimal Retirement Age\n'
-                  f'(FIRE={config.fire_multiplier}, vit floor={vf}, U=c^{config.utility_power})')
+                  f'(FIRE={config.fire_multiplier}, vit={vf}, {ss_lbl}, '
+                  f'tax_adv={config.retirement_tax_advantage:.0%})')
     ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
 
@@ -932,12 +1040,16 @@ def plot_retirement_sweep(
 
     # Summary table
     print(f"\n=== Retirement Age Sweep Summary ===")
+    ss_desc = f"SS@{config.ss_claiming_age}" if config.ss_enabled else "no SS"
     print(f"FIRE={config.fire_multiplier}, "
           f"U(c)=c^{config.utility_power}, "
           f"δ={config.discount_rate:.0%}, "
           f"vitality(peak={config.vitality_peak_age}, "
           f"hl={config.vitality_half_life:.0f}, "
           f"floor={config.vitality_floor})")
+    print(f"{ss_desc}, "
+          f"retirement_tax_adv={config.retirement_tax_advantage:.0%}, "
+          f"lifespan={config.expected_lifespan}")
     print(f"{'Portfolio':<28s}  {'Optimal Age':>11s}  {'E[CE]':>12s}")
     print("-" * 55)
     for name, data in results.items():
@@ -959,8 +1071,8 @@ def parse_args() -> argparse.Namespace:
                         help='Age to start simulation (default: 25)')
     parser.add_argument('--retirement-age', type=int, default=37,
                         help='Retirement age (default: 37)')
-    parser.add_argument('--lifespan', type=int, default=100,
-                        help='Expected lifespan (default: 100)')
+    parser.add_argument('--lifespan', type=int, default=90,
+                        help='Expected lifespan (default: 90)')
     parser.add_argument('--initial-nw', type=float, default=500,
                         help='Initial net worth in $1,000 units (default: 500)')
     parser.add_argument('--initial-expenses', type=float, default=60,
@@ -1007,6 +1119,15 @@ def parse_args() -> argparse.Namespace:
                         help='Minimum vitality multiplier (default: 0.3)')
     parser.add_argument('--no-vitality', action='store_true',
                         help='Disable vitality weighting (floor=1.0)')
+    # Social Security
+    parser.add_argument('--no-ss', action='store_true',
+                        help='Disable Social Security')
+    parser.add_argument('--ss-claiming-age', type=int, default=67,
+                        help='SS claiming age (default: 67, range 62-70)')
+    # Tax
+    parser.add_argument('--retirement-tax-advantage', type=float, default=1.25,
+                        help='Retirement withdrawal purchasing power multiplier '
+                             '(default: 1.25, i.e. LTCG/Roth vs earned income)')
     return parser.parse_args()
 
 
@@ -1031,6 +1152,9 @@ def main() -> None:
         vitality_peak_age=args.vitality_peak,
         vitality_half_life=args.vitality_half_life,
         vitality_floor=1.0 if args.no_vitality else args.vitality_floor,
+        ss_enabled=not args.no_ss,
+        ss_claiming_age=args.ss_claiming_age,
+        retirement_tax_advantage=args.retirement_tax_advantage,
     )
 
     if args.optimal_leverage:
@@ -1057,9 +1181,13 @@ def main() -> None:
         vit_desc = (f"vitality(peak={config.vitality_peak_age}, "
                     f"hl={config.vitality_half_life:.0f}, "
                     f"floor={config.vitality_floor})")
+        ss_desc = (f"SS@{config.ss_claiming_age}" if config.ss_enabled
+                   else "no SS")
         print(f"FIRE={config.fire_multiplier}, "
               f"U(c)=c^{config.utility_power}, "
               f"δ={config.discount_rate:.0%}, {vit_desc}")
+        print(f"{ss_desc}, "
+              f"retirement_tax_adv={config.retirement_tax_advantage:.0%}")
         print()
         sweep_results = run_retirement_sweep(
             config, spending_rule,
