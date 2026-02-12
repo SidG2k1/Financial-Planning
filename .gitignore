@@ -1,2 +1,12 @@
 __pycache__/
 *.pyc
+.DS_Store
+
+# Virtual environment (created in project root)
+bin/
+lib/
+share/
+pyvenv.cfg
+
+# Personal configuration
+.env
