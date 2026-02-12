@@ -143,7 +143,7 @@ ax1.axhline(y=0, color='r', linestyle='--', alpha=0.3)
 ax1.set_xlabel('Leverage Ratio')
 ax1.set_ylabel('Final Net Worth ($M)')
 ax1.set_title('Final NW vs Leverage')
-ax1.set_yscale('symlog', linthresh=1)
+ax1.set_yscale('symlog', linthresh=100)
 ax1.legend(fontsize=8)
 
 ax2.plot(levs, [r * 100 for r in lev_results['ruin_pct']], 'o-',
@@ -354,7 +354,7 @@ for col, (name, data) in enumerate(show_portfolios.items()):
     ax_nw.fill_between(ages, data['p25'], data['p75'], alpha=0.3, label='25th-75th %ile')
     ax_nw.plot(ages, data['median'], linewidth=2, label='Median')
     ax_nw.axvline(x=opt_retire, color='r', linestyle='--', alpha=0.5)
-    ax_nw.set_yscale('symlog', linthresh=0.1)
+    ax_nw.set_yscale('symlog', linthresh=100)
     ax_nw.set_title(f'{name}\nE[U]={fmt_u(u)}  (CE={format_money(ce)}/yr)')
     ax_nw.legend(fontsize=7)
     if col == 0:
@@ -370,7 +370,7 @@ for col, (name, data) in enumerate(show_portfolios.items()):
     ax_sp.axvline(x=opt_retire, color='r', linestyle='--', alpha=0.5)
     ax_sp.axhline(y=config.spending_floor, color='gray', linestyle=':', alpha=0.5,
                    label=f'Floor ${config.spending_floor:.0f}k')
-    ax_sp.set_yscale('symlog', linthresh=10)
+    ax_sp.set_yscale('symlog', linthresh=100)
     ax_sp.set_xlabel('Age')
     ax_sp.legend(fontsize=7)
     if col == 0:
@@ -416,7 +416,7 @@ for col, (name, data) in enumerate(stress_show.items()):
     ax_nw.fill_between(ages, data['p25'], data['p75'], alpha=0.3, label='25th-75th %ile')
     ax_nw.plot(ages, data['median'], linewidth=2, label='Median')
     ax_nw.axvline(x=opt_retire, color='r', linestyle='--', alpha=0.5)
-    ax_nw.set_yscale('symlog', linthresh=0.1)
+    ax_nw.set_yscale('symlog', linthresh=100)
     ax_nw.set_title(f'{name}\nE[U]={fmt_u(u)}  (CE={format_money(ce)}/yr)')
     ax_nw.legend(fontsize=7)
     if col == 0:
