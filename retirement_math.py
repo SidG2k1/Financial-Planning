@@ -95,7 +95,7 @@ class SimulationConfig:
     # Utility parameters (used by CRRAUtility, kept here for CLI convenience)
     utility_power: float = 0.65        # CRRA exponent α
     discount_rate: float = 0.03        # annual time preference δ (β = 1/(1+δ))
-    fire_multiplier: float = 1.0       # utility mult for retirement years (1.5 = FIRE)
+    fire_multiplier: float = 1.8       # utility mult for retirement years
 
     # Social Security
     ss_enabled: bool = True
@@ -1108,8 +1108,8 @@ def parse_args() -> argparse.Namespace:
                         help='Annual time discount rate for utility (default: 0.03)')
     parser.add_argument('--utility-power', type=float, default=0.65,
                         help='CRRA exponent: U(c) = c^α (default: 0.65)')
-    parser.add_argument('--fire-multiplier', type=float, default=1.0,
-                        help='Utility multiplier for retirement years (default: 1.0)')
+    parser.add_argument('--fire-multiplier', type=float, default=1.8,
+                        help='Utility multiplier for retirement years (default: 1.8)')
     # Vitality curve
     parser.add_argument('--vitality-peak', type=int, default=30,
                         help='Age of peak vitality (default: 30)')
