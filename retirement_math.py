@@ -232,7 +232,8 @@ def main() -> None:
 
     if args.optimal_leverage:
         config.leverage_ratio = compute_optimal_leverage(config)
-        print(f"Using Kelly-optimal leverage: {config.leverage_ratio:.2f}x")
+        kelly_label = "Kelly (tax-adj)" if config.leverage_instrument != 'generic' else "Kelly-optimal"
+        print(f"Using {kelly_label} leverage: {config.leverage_ratio:.2f}x")
 
     # Build spending rule (Decision Model)
     if args.amortized or args.retirement_sweep > 0 or args.sweep_2d:
@@ -294,7 +295,8 @@ def main() -> None:
     elif args.leverage_sweep > 0:
         print(f"Running leverage sweep ({args.leverage_sweep} sims per level)...")
         kelly = compute_optimal_leverage(config)
-        print(f"Kelly optimal: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x")
+        kelly_label = "Kelly (tax-adj)" if config.leverage_instrument != 'generic' else "Kelly optimal"
+        print(f"{kelly_label}: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x")
         print(f"Spending: {type(spending_rule).__name__}")
         print()
         sweep = run_leverage_sweep(config, spending_rule, utility_scorer,
