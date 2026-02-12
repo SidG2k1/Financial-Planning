@@ -95,7 +95,7 @@ def plot_leverage_sweep(sweep: Dict[str, list], config: SimulationConfig) -> Non
     ax1.set_xlabel('Leverage Ratio')
     ax1.set_ylabel('Final Net Worth ($M)')
     ax1.set_title('Final NW vs Leverage')
-    ax1.set_yscale('symlog', linthresh=1)
+    ax1.set_yscale('symlog', linthresh=100)
     ax1.legend(fontsize=8)
 
     ax2.plot(levs, [r * 100 for r in sweep['ruin_pct']], 'o-',
@@ -208,9 +208,9 @@ def plot_2d_sweep(sweep: Dict, config: SimulationConfig) -> None:
     fig, ax = plt.subplots(figsize=(10, 8))
 
     if sweep['param1'] in LOG_SCALE_PARAMS:
-        ax.set_yscale('log')
+        ax.set_yscale('symlog', linthresh=100)
     if sweep['param2'] in LOG_SCALE_PARAMS:
-        ax.set_xscale('log')
+        ax.set_xscale('symlog', linthresh=100)
 
     levels = 20
     cmap = 'RdYlGn_r' if is_ruin else 'RdYlGn'

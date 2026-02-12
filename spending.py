@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Tuple
@@ -186,3 +187,74 @@ class VitalityAmortizedSpending(SpendingRule):
             regular = max(0.0, total * v_now / v_annuity)
 
         return regular + ctx.one_time_expense
+
+
+class MarginalUtilitySpending(SpendingRule):
+    """Euler equation-optimal spending: equalize marginal utility per PV-dollar across ages.
+
+    For CRRA utility V = Σ w_t · c_t^α, the derivative wrt consumption is:
+
+        ∂V/∂c_t = w_t · α · c_t^(α-1)
+
+    where w_t = β^t · vitality(age_t) · fire_multiplier_t.
+
+    The budget constraint discounts spending at the financial rate d^t.
+    Optimal allocation equalizes marginal utility per present-value dollar:
+
+        ∂V/∂c_t / d^t = λ    for all t
+
+    Solving: c_t ∝ (w_t / d^t)^γ  where γ = 1/(1-α) is the elasticity of
+    intertemporal substitution (EIS).
+
+    Compared to VitalityAmortizedSpending (c ∝ vitality), this:
+    1. Includes time preference (β) and FIRE multiplier in allocation weights
+    2. Nonlinearly amplifies weight differences via γ (higher CRRA curvature
+       means more aggressive reallocation toward high-utility years)
+    """
+
+    def compute(self, ctx: YearContext) -> float:
+        remaining = _planning_remaining(ctx)
+        total, d = _compute_total_resources(ctx)
+        config = ctx.config
+
+        alpha = config.utility_power
+        # γ = EIS = 1/(1-α); cap to avoid numerical blow-up near α ≈ 1
+        gamma = min(1.0 / (1.0 - alpha), 50.0) if alpha < 1.0 else 50.0
+        beta = 1.0 / (1.0 + config.discount_rate)
+        floor = config.spending_floor
+
+        # --- Compute optimal consumption weights in log-space ---
+        # w_s = β^s · v(age+s) · fire_s  (utility weight for year s)
+        # Optimal: c_s ∝ (w_s / d^s)^γ   (Euler equation solution)
+        # log(φ_s) = γ · [s·ln(β/d) + ln(v_s) + ln(fire_s)]
+        ln_beta_over_d = math.log(beta / d) if d > 0 else 0.0
+
+        log_phi = []
+        for s in range(remaining):
+            future_age = ctx.age + s
+            v = vitality_at_age(future_age, config)
+            fire = config.fire_multiplier if future_age >= ctx.retirement_age else 1.0
+            lp = gamma * (s * ln_beta_over_d + math.log(v) + math.log(fire))
+            log_phi.append(lp)
+
+        # Normalize to prevent overflow before exponentiating
+        max_log = max(log_phi)
+        phi = [math.exp(lp - max_log) for lp in log_phi]
+
+        # --- Budget constraint: K · Σ φ_s · d^s = excess ---
+        if floor > 0:
+            flat_annuity = (1.0 - d ** remaining) / (1.0 - d)
+            pv_floor = floor * flat_annuity
+            excess = max(0.0, total - pv_floor)
+        else:
+            excess = max(0.0, total)
+
+        weighted_sum = sum(phi[s] * (d ** s) for s in range(remaining))
+
+        if weighted_sum <= 0:
+            return max(floor, 0.0) + ctx.one_time_expense
+
+        K = excess / weighted_sum
+        current_spending = K * phi[0] + floor
+
+        return max(current_spending, floor) + ctx.one_time_expense
