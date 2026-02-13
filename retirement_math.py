@@ -7,9 +7,9 @@
 import argparse
 
 from config import SimulationConfig, format_money, load_env
-from models import compute_optimal_leverage
 from plotting import (
     plot_2d_sweep,
+    plot_instrument_comparison,
     plot_leverage_sweep,
     plot_monte_carlo,
     plot_results,
@@ -27,6 +27,7 @@ from sweeps import (
     PORTFOLIO_NAME_MAP,
     _make_param_range,
     run_2d_sweep,
+    run_instrument_comparison,
     run_leverage_sweep,
     run_monte_carlo,
     run_retirement_sweep,
@@ -63,8 +64,29 @@ def parse_args() -> argparse.Namespace:
     # Leverage
     parser.add_argument('--leverage', type=float, default=2.0,
                         help='Leverage ratio for leveraged portfolio (default: 2.0)')
-    parser.add_argument('--optimal-leverage', action='store_true',
-                        help='Use Kelly-optimal leverage instead of --leverage')
+    parser.add_argument('--leverage-instrument', default='generic',
+                        choices=['generic', 'futures', 'box_spread'],
+                        help='Leverage implementation: generic (current), futures '
+                             '(Section 1256 mark-to-market), box_spread (tax-deferred) '
+                             '(default: generic)')
+    parser.add_argument('--instrument-sweep', type=int, default=0, metavar='N',
+                        help='Compare all leverage instruments with N sims each')
+    # Futures-specific
+    parser.add_argument('--futures-tax-rate', type=float, default=0.268,
+                        help='Blended 1256 mark-to-market tax rate (default: 0.268)')
+    parser.add_argument('--futures-spread', type=float, default=0.002,
+                        help='Futures implied financing spread (default: 0.002)')
+    parser.add_argument('--futures-roll-cost', type=float, default=0.001,
+                        help='Annual futures rolling cost (default: 0.001)')
+    # Box spread-specific
+    parser.add_argument('--box-spread', type=float, default=0.004,
+                        help='Box spread financing premium (default: 0.004)')
+    parser.add_argument('--box-div-yield', type=float, default=0.013,
+                        help='Equity dividend yield for box spread tax (default: 0.013)')
+    parser.add_argument('--box-div-tax-rate', type=float, default=0.238,
+                        help='Qualified dividend tax rate (default: 0.238)')
+    parser.add_argument('--box-crisis-widening', type=float, default=0.01,
+                        help='Box spread cost widening during crises (default: 0.01)')
     # Simulation mode
     parser.add_argument('--monte-carlo', type=int, default=0, metavar='N',
                         help='Run N Monte Carlo simulations (default: 0 = single run)')
@@ -172,6 +194,14 @@ def main() -> None:
         initial_bond_yield=args.bond_yield,
         long_run_bond_yield=args.bond_yield,
         margin_spread=args.margin_spread,
+        leverage_instrument=args.leverage_instrument,
+        futures_tax_rate=args.futures_tax_rate,
+        futures_financing_spread=args.futures_spread,
+        futures_roll_cost=args.futures_roll_cost,
+        box_spread_financing_spread=args.box_spread,
+        box_div_yield=args.box_div_yield,
+        box_div_tax_rate=args.box_div_tax_rate,
+        box_crisis_spread_widening=args.box_crisis_widening,
         leverage_ratio=args.leverage,
         utility_power=args.utility_power,
         discount_rate=args.discount_rate,
@@ -197,10 +227,6 @@ def main() -> None:
         bayesian_bond_yield_std=args.bayesian_bond_std,
     )
 
-    if args.optimal_leverage:
-        config.leverage_ratio = compute_optimal_leverage(config)
-        print(f"Using Kelly-optimal leverage: {config.leverage_ratio:.2f}x")
-
     # Build spending rule (Decision Model)
     if args.amortized or args.retirement_sweep > 0 or args.sweep_2d:
         if config.vitality_floor < 1.0:
@@ -215,7 +241,14 @@ def main() -> None:
 
     sim_years = config.expected_lifespan - config.start_age + 1
 
-    if args.sweep_2d:
+    if args.instrument_sweep > 0:
+        print(f"Running instrument comparison ({args.instrument_sweep} sims per point)...")
+        print(f"Spending: {type(spending_rule).__name__}")
+        inst_results = run_instrument_comparison(
+            config, spending_rule, utility_scorer,
+            n_simulations=args.instrument_sweep)
+        plot_instrument_comparison(inst_results, config)
+    elif args.sweep_2d:
         p1_cli, p2_cli, n_str = args.sweep_2d
         n_sims = int(n_str)
         p1 = PARAM_MAP[p1_cli]
@@ -251,8 +284,6 @@ def main() -> None:
         plot_retirement_sweep(sweep_results, config)
     elif args.leverage_sweep > 0:
         print(f"Running leverage sweep ({args.leverage_sweep} sims per level)...")
-        kelly = compute_optimal_leverage(config)
-        print(f"Kelly optimal: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x")
         print(f"Spending: {type(spending_rule).__name__}")
         print()
         sweep = run_leverage_sweep(config, spending_rule, utility_scorer,

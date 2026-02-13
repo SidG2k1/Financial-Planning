@@ -98,13 +98,6 @@ def compute_ss_benefit(config: SimulationConfig,
     return max(0.0, net_ss)
 
 
-def compute_optimal_leverage(config: SimulationConfig) -> float:
-    """Compute Kelly-optimal leverage: L* = (ERP - spread) / sigma^2."""
-    excess = config.equity_risk_premium - config.margin_spread
-    if excess <= 0:
-        return 1.0
-    return excess / config.stock_vol ** 2
-
 
 def evolve_bond_yield(
     current_yield: float,

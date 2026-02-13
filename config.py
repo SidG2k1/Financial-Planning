@@ -116,6 +116,22 @@ class SimulationConfig:
     # Leverage costs: margin_fee = bond_yield + spread
     margin_spread: float = 0.015        # broker spread above risk-free rate
 
+    # Leverage instrument: 'generic' (current behavior), 'futures' (Section 1256
+    # mark-to-market annual tax), 'box_spread' (tax-deferred via ETF + box financing)
+    leverage_instrument: str = 'generic'
+
+    # Futures (Section 1256): 60/40 long-term/short-term mark-to-market tax
+    futures_tax_rate: float = 0.268          # 60%*23.8% + 40%*30.8%
+    futures_financing_spread: float = 0.002  # implied financing ≈ risk-free + 20bps
+    futures_roll_cost: float = 0.001         # quarterly rolling ≈ 10bps/yr
+
+    # Box spread + ETF: deferred cap gains, annual dividend tax, roll risk
+    box_spread_financing_spread: float = 0.004  # risk-free + ~40bps
+    box_div_yield: float = 0.013               # US equity dividend yield (~1.3%)
+    box_div_tax_rate: float = 0.238            # qualified dividend rate (20% + 3.8% NIIT)
+    box_crisis_spread_widening: float = 0.01   # +100bps during crises
+    box_crisis_threshold: float = -0.10        # excess return trigger for crisis widening
+
     # Tax: progressive federal brackets (2023) + flat state rate
     state_tax_rate: float = 0.05
     federal_brackets: List[Tuple[float, float]] = field(default_factory=lambda: [
@@ -197,6 +213,10 @@ class SimulationConfig:
             raise ValueError(f"utility_power must be > 0, got {self.utility_power}")
         if self.spending_floor < 0:
             raise ValueError(f"spending_floor must be >= 0, got {self.spending_floor}")
+        valid_instruments = ('generic', 'futures', 'box_spread')
+        if self.leverage_instrument not in valid_instruments:
+            raise ValueError(f"leverage_instrument must be one of {valid_instruments}, "
+                             f"got {self.leverage_instrument!r}")
 
 
 @dataclass

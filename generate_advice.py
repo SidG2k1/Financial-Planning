@@ -10,7 +10,7 @@ import numpy as np
 from dataclasses import replace
 
 from config import SimulationConfig, format_money, load_env
-from models import compute_optimal_leverage, vitality_at_age
+from models import vitality_at_age
 from simulator import run_simulation
 from spending import (
     AmortizedSpending,
@@ -37,8 +37,6 @@ config = SimulationConfig(
     stochastic_income=True,
     antithetic=True,
 )
-kelly = compute_optimal_leverage(config)
-
 print("=" * 70)
 print("  FINANCIAL PLANNING ANALYSIS")
 inc = config.income_schedule
@@ -46,7 +44,6 @@ inc_lo, inc_hi = min(inc), max(inc)
 inc_str = f"${inc_lo:.0f}-{inc_hi:.0f}k" if inc_lo != inc_hi else f"${inc_lo:.0f}k"
 print(f"  Profile: age {config.start_age}, income {inc_str}, NW ${config.initial_net_worth:.0f}k")
 print(f"  Expenses: ${config.initial_expenses}k/yr  |  Risk tolerance: AGGRESSIVE")
-print(f"  Kelly optimal leverage: {kelly:.2f}x")
 print("=" * 70)
 
 
@@ -136,8 +133,6 @@ ax1.fill_between(levs, lev_results['p10_nw'], lev_results['p90_nw'],
 ax1.fill_between(levs, lev_results['p25_nw'], lev_results['p75_nw'],
                  alpha=0.3, label='25th-75th %ile')
 ax1.plot(levs, lev_results['median_nw'], 'o-', linewidth=2, label='Median')
-ax1.axvline(x=kelly, color='green', linestyle='--', alpha=0.7,
-            label=f'Kelly optimal ({kelly:.2f}x)')
 ax1.axhline(y=0, color='r', linestyle='--', alpha=0.3)
 ax1.set_xlabel('Leverage Ratio')
 ax1.set_ylabel('Final Net Worth ($M)')
@@ -148,8 +143,6 @@ ax1.legend(fontsize=8)
 ax2.plot(levs, [r * 100 for r in lev_results['ruin_pct']], 'o-',
          linewidth=2, color='red')
 ax2.axhline(y=5, color='orange', linestyle='--', alpha=0.7, label='5% threshold')
-ax2.axvline(x=kelly, color='green', linestyle='--', alpha=0.7,
-            label=f'Kelly ({kelly:.2f}x)')
 ax2.set_xlabel('Leverage Ratio')
 ax2.set_ylabel('Ruin Probability (%)')
 ax2.set_title('Ruin Risk vs Leverage')
@@ -159,8 +152,6 @@ ax2.legend(fontsize=8)
 u_vals = lev_results['mean_utility']
 best_idx = int(np.argmax(u_vals))
 ax3.plot(levs, u_vals, 'o-', linewidth=2, color='purple')
-ax3.axvline(x=kelly, color='green', linestyle='--', alpha=0.7,
-            label=f'Kelly ({kelly:.2f}x)')
 ax3.axvline(x=levs[best_idx], color='purple', linestyle=':',
             alpha=0.7, label=f'Max E[U] ({levs[best_idx]:.2f}x)')
 ax3.set_xlabel('Leverage Ratio')
@@ -179,7 +170,6 @@ best_ce = lev_results['mean_ce'][best_idx]
 best_ruin = lev_results['ruin_pct'][best_idx]
 print(f"\n  Utility-maximizing leverage: {best_lev:.2f}x  "
       f"E[U]={fmt_u(best_u)}  (CE={format_money(best_ce)}/yr)  ruin={best_ruin:.1%}")
-print(f"  Kelly optimal: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x")
 
 
 # -----------------------------------------------------------------------
@@ -584,7 +574,6 @@ print(f"""
     Leveraged portfolio:  retire @ {lev_data.get('optimal_age','?')}  ->  E[U]={fmt_u(lev_data.get('optimal_utility',0))}  (CE={format_money(lev_data.get('optimal_ce',0))}/yr)
 
   LEVERAGE
-    Kelly optimal: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x
     Utility-maximizing: {best_lev:.2f}x  E[U]={fmt_u(best_u)}  (CE={format_money(best_ce)}/yr)  ruin={best_ruin:.1%}
 
   JOINT OPTIMUM (2D grid, two-pass refinement)
