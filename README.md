@@ -168,7 +168,6 @@ Available parameters: `retirement-age`, `leverage`, `erp`, `stock-vol`, `fire-mu
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--leverage` | 2.0 | Leverage ratio for leveraged portfolio |
-| `--optimal-leverage` | — | Use Kelly-optimal leverage instead |
 | `--maintenance-margin` | 0.25 | Margin call equity threshold |
 | `--no-margin-calls` | — | Disable margin call mechanics |
 
@@ -261,8 +260,6 @@ python retirement_math.py --amortized --seed 42
 ### "What leverage should I use?"
 ```bash
 python retirement_math.py --leverage-sweep 500
-# Or use Kelly-optimal:
-python retirement_math.py --optimal-leverage
 ```
 
 ### "What's the joint optimal retirement age and leverage?"
@@ -294,7 +291,7 @@ All flat files in the project root (no package — `python retirement_math.py` w
 |------|---------|
 | `retirement_math.py` | CLI entry point (`parse_args` + `main`) |
 | `config.py` | `SimulationConfig`, `SimulationResult`, tax/formatting helpers |
-| `models.py` | Vitality, Social Security, Vasicek yields, Kelly, Gompertz, Bayesian sampling |
+| `models.py` | Vitality, Social Security, Vasicek yields, Gompertz, Bayesian sampling |
 | `spending.py` | `SpendingRule` ABC, `FixedSpending`, `AmortizedSpending`, `VitalityAmortizedSpending`, `MarginalUtilitySpending` |
 | `utility.py` | `UtilityScorer` ABC, `CRRAUtility` |
 | `simulator.py` | `run_simulation` — the core financial model |

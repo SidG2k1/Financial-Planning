@@ -98,39 +98,6 @@ def compute_ss_benefit(config: SimulationConfig,
     return max(0.0, net_ss)
 
 
-def compute_optimal_leverage(config: SimulationConfig) -> float:
-    """Compute tax-adjusted Kelly-optimal leverage.
-
-    Base Kelly: L* = excess_return / sigma^2
-
-    Tax adjustments by instrument:
-    - Generic: L* = (ERP - margin_spread) / σ²
-    - Futures: mark-to-market tax reduces expected excess by (1 - tax_rate):
-              L* = (ERP - spread) * (1 - futures_tax_rate) / σ²
-    - Box spread: dividend tax acts as additional leverage-proportional cost:
-              L* = (ERP - spread - div_yield * div_tax_rate) / σ²
-
-    Note: Even with tax adjustment, Kelly assumes log utility, normal returns,
-    no margin calls, and constant vol. The simulation uses CRRA, fat tails,
-    margin calls, and stochastic vol — actual optimal is typically lower.
-    Use leverage sweeps for authoritative recommendations.
-    """
-    if config.leverage_instrument == 'futures':
-        spread = config.futures_financing_spread + config.futures_roll_cost
-        # Mark-to-market tax reduces expected excess return
-        excess = (config.equity_risk_premium - spread) * (1 - config.futures_tax_rate)
-    elif config.leverage_instrument == 'box_spread':
-        # Dividend tax acts as leverage-proportional cost
-        spread = (config.box_spread_financing_spread
-                  + config.box_div_yield * config.box_div_tax_rate)
-        excess = config.equity_risk_premium - spread
-    else:
-        spread = config.margin_spread
-        excess = config.equity_risk_premium - spread
-    if excess <= 0:
-        return 1.0
-    return excess / config.stock_vol ** 2
-
 
 def evolve_bond_yield(
     current_yield: float,

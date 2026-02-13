@@ -10,7 +10,6 @@ import numpy as np
 
 from config import SimulationConfig, SimulationResult, format_money, post_tax
 from models import (
-    compute_optimal_leverage,
     compute_ss_benefit,
     evolve_bond_yield,
     sample_death_age,
@@ -114,12 +113,10 @@ def run_simulation(
     ss_benefit = compute_ss_benefit(config)
 
     if not quiet:
-        kelly = compute_optimal_leverage(config)
         print(f"Simulation seed: {seed}")
         print(f"E[stock return] = bond_yield + ERP = ~{config.initial_bond_yield + config.equity_risk_premium:.1%}")
         print(f"Margin fee = bond_yield + spread = ~{config.initial_bond_yield + config.margin_spread:.1%}")
-        kelly_label = "Kelly (tax-adj)" if config.leverage_instrument != 'generic' else "Kelly optimal"
-        print(f"{kelly_label}: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x  |  Using: {config.leverage_ratio:.2f}x")
+        print(f"Using leverage: {config.leverage_ratio:.2f}x")
         tail_desc = f"Student-t(df={config.stock_tail_df:.0f})" if config.stock_tail_df <= 100 else "Normal"
         print(f"Return dist: {tail_desc}  |  Vol clustering: rho={config.vol_persistence}, eta={config.vol_of_vol}")
         print(f"Stock-bond corr: {config.stock_bond_corr:+.2f}")

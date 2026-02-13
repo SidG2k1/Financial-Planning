@@ -7,7 +7,6 @@
 import argparse
 
 from config import SimulationConfig, format_money, load_env
-from models import compute_optimal_leverage
 from plotting import (
     plot_2d_sweep,
     plot_instrument_comparison,
@@ -65,8 +64,6 @@ def parse_args() -> argparse.Namespace:
     # Leverage
     parser.add_argument('--leverage', type=float, default=2.0,
                         help='Leverage ratio for leveraged portfolio (default: 2.0)')
-    parser.add_argument('--optimal-leverage', action='store_true',
-                        help='Use Kelly-optimal leverage instead of --leverage')
     parser.add_argument('--leverage-instrument', default='generic',
                         choices=['generic', 'futures', 'box_spread'],
                         help='Leverage implementation: generic (current), futures '
@@ -230,11 +227,6 @@ def main() -> None:
         bayesian_bond_yield_std=args.bayesian_bond_std,
     )
 
-    if args.optimal_leverage:
-        config.leverage_ratio = compute_optimal_leverage(config)
-        kelly_label = "Kelly (tax-adj)" if config.leverage_instrument != 'generic' else "Kelly-optimal"
-        print(f"Using {kelly_label} leverage: {config.leverage_ratio:.2f}x")
-
     # Build spending rule (Decision Model)
     if args.amortized or args.retirement_sweep > 0 or args.sweep_2d:
         if config.vitality_floor < 1.0:
@@ -251,8 +243,6 @@ def main() -> None:
 
     if args.instrument_sweep > 0:
         print(f"Running instrument comparison ({args.instrument_sweep} sims per point)...")
-        kelly = compute_optimal_leverage(config)
-        print(f"Kelly optimal (generic): {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x")
         print(f"Spending: {type(spending_rule).__name__}")
         inst_results = run_instrument_comparison(
             config, spending_rule, utility_scorer,
@@ -294,9 +284,6 @@ def main() -> None:
         plot_retirement_sweep(sweep_results, config)
     elif args.leverage_sweep > 0:
         print(f"Running leverage sweep ({args.leverage_sweep} sims per level)...")
-        kelly = compute_optimal_leverage(config)
-        kelly_label = "Kelly (tax-adj)" if config.leverage_instrument != 'generic' else "Kelly optimal"
-        print(f"{kelly_label}: {kelly:.2f}x  |  Half-Kelly: {kelly/2:.2f}x")
         print(f"Spending: {type(spending_rule).__name__}")
         print()
         sweep = run_leverage_sweep(config, spending_rule, utility_scorer,

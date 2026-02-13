@@ -7,7 +7,6 @@ from typing import Dict
 import numpy as np
 
 from config import SimulationConfig, SimulationResult, format_money
-from models import compute_optimal_leverage
 from sweeps import LOG_SCALE_PARAMS
 
 
@@ -81,7 +80,6 @@ def plot_leverage_sweep(sweep: Dict[str, list], config: SimulationConfig) -> Non
     """Plot leverage sweep: NW percentiles, ruin probability, and CE."""
     plt = _get_plt()
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
-    kelly = compute_optimal_leverage(config)
     levs = sweep['leverage']
 
     ax1.fill_between(levs, sweep['p10_nw'], sweep['p90_nw'],
@@ -89,8 +87,6 @@ def plot_leverage_sweep(sweep: Dict[str, list], config: SimulationConfig) -> Non
     ax1.fill_between(levs, sweep['p25_nw'], sweep['p75_nw'],
                      alpha=0.3, label='25th-75th %ile')
     ax1.plot(levs, sweep['median_nw'], 'o-', linewidth=2, label='Median')
-    ax1.axvline(x=kelly, color='green', linestyle='--', alpha=0.7,
-                label=f'Kelly optimal ({kelly:.2f}x)')
     ax1.axhline(y=0, color='r', linestyle='--', alpha=0.3)
     ax1.set_xlabel('Leverage Ratio')
     ax1.set_ylabel('Final Net Worth ($M)')
@@ -102,8 +98,6 @@ def plot_leverage_sweep(sweep: Dict[str, list], config: SimulationConfig) -> Non
              linewidth=2, color='red')
     ax2.axhline(y=5, color='orange', linestyle='--', alpha=0.7,
                 label='5% risk threshold')
-    ax2.axvline(x=kelly, color='green', linestyle='--', alpha=0.7,
-                label=f'Kelly optimal ({kelly:.2f}x)')
     ax2.set_xlabel('Leverage Ratio')
     ax2.set_ylabel('Ruin Probability (%)')
     ax2.set_title('Ruin Risk vs Leverage')
@@ -112,8 +106,6 @@ def plot_leverage_sweep(sweep: Dict[str, list], config: SimulationConfig) -> Non
 
     u_vals = sweep['mean_utility']
     ax3.plot(levs, u_vals, 'o-', linewidth=2, color='purple')
-    ax3.axvline(x=kelly, color='green', linestyle='--', alpha=0.7,
-                label=f'Kelly optimal ({kelly:.2f}x)')
     best_idx = int(np.argmax(u_vals))
     ax3.axvline(x=levs[best_idx], color='purple', linestyle=':',
                 alpha=0.7, label=f'Max E[U] ({levs[best_idx]:.2f}x)')

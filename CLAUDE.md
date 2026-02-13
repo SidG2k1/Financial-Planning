@@ -48,7 +48,7 @@ Modular flat-file layout with three composable layers. All files live in the pro
 |------|---------|-------|
 | `retirement_math.py` | CLI entry point: `parse_args()` + `main()` | ~200 |
 | `config.py` | `SimulationConfig`, `SimulationResult`, `post_tax`, `format_money` | ~250 |
-| `models.py` | Vitality, SS benefit, Vasicek yields, Kelly, Gompertz mortality, Bayesian sampling | ~110 |
+| `models.py` | Vitality, SS benefit, Vasicek yields, Gompertz mortality, Bayesian sampling | ~110 |
 | `spending.py` | `YearContext`, `SpendingRule` ABC, `FixedSpending`, `AmortizedSpending`, `VitalityAmortizedSpending`, `MarginalUtilitySpending` | ~230 |
 | `utility.py` | `UtilityScorer` ABC, `CRRAUtility` | ~80 |
 | `simulator.py` | `run_simulation`, `_build_income_schedule`, `_generate_year_shocks` | ~200 |
@@ -111,7 +111,6 @@ retirement_math.py   (imports all — thin CLI layer)
   - `generic` — borrowing cost only, no tax drag (default, backward-compatible)
   - `futures` — Section 1256 mark-to-market: annual tax on gains (~26.8% blended 60/40 rate), low financing spread (20bps), quarterly roll cost (10bps/yr). Loss carryforward not modeled (conservative).
   - `box_spread` — box spread + ETF: capital gains deferred, annual dividend tax drag (`leverage × div_yield × div_tax_rate`), higher financing spread (40bps), crisis spread widening (+100bps when stock excess return < -10%)
-- **Kelly Optimal Leverage**: Tax-adjusted Kelly formula. Generic: `L* = (ERP - spread) / σ²`. Futures: `L* = (ERP - spread) × (1 - tax_rate) / σ²` (mark-to-market tax reduces expected excess). Box spread: `L* = (ERP - spread - div_yield × div_tax_rate) / σ²` (dividend tax as leverage-proportional cost). **Note**: Kelly still assumes log utility, normal returns, no margin calls — actual optimal from sweeps is typically lower
 - **Margin Calls**: `LeveragedStockPortfolio` triggers forced liquidation when equity drops below `maintenance_margin` (default 25%), reducing leverage for a 2-year cooldown
 - **Stochastic Lifespan**: Gompertz mortality `h(age) = a·exp(b·age)` — spending rules still plan for `expected_lifespan`, but simulation terminates at sampled death age (longevity risk)
 - **Stochastic Income**: Market-correlated job loss `P(loss) = base · exp(sensitivity · max(0, -excess_return))` — income shocks during working years
