@@ -1,0 +1,54 @@
+{
+  "person": {
+    "current_age": 45,
+    "retirement_age": 66,
+    "maximum_age": 117,
+    "sex": "female",
+    "longevity_adjustment": 3.0,
+    "education": "post_college",
+    "current_year": 2026,
+    "social_security_claim_age": 66
+  },
+  "wealth": {
+    "domestic_equity": 200000.0,
+    "global_equity": 250000.0,
+    "bonds": 600000.0,
+    "cash": 150000.0
+  },
+  "income": {
+    "current_salary": 150000.0,
+    "defined_contribution": 15000.0,
+    "employer_match_rate": 0.5,
+    "explicit_real_income": null,
+    "social_security_enabled": true,
+    "social_security_taxable_max": 184500.0
+  },
+  "preferences": {
+    "time_preference": 0.02,
+    "consumption_elasticity": 0.4,
+    "consumption_reference": 50000.0,
+    "risk_tolerance": 0.55,
+    "spending_floor": 50000.0,
+    "spending_floor_importance": 2.0,
+    "spending_floor_scale": 10000.0,
+    "nondiscretionary_consumption": 50000.0,
+    "annuitization_fraction": 1.0,
+    "bequest_flexibility": 0.25,
+    "bequest_strength": 0.05,
+    "bequest_mode": "fixed",
+    "fixed_bequest": 1397805.8599418863,
+    "vitality_peak_age": 30,
+    "vitality_half_life": 35.0,
+    "vitality_floor": 0.3,
+    "retirement_utility_multiplier": 1.0
+  },
+  "human_capital_exposure": {
+    "equity_fraction": 0.2,
+    "global_fraction_of_equity": 0.25
+  },
+  "liability_exposure": {
+    "equity_fraction": 0.15,
+    "global_fraction_of_equity": 0.0
+  },
+  "utility_addons": []
+}

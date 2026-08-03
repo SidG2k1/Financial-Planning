@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lifecycle-finance"
+version = "0.1.0"
+description = "Lifecycle balance-sheet planning, stochastic retirement simulation, and account-aware optimization."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=2.0",
+  "scipy>=1.14",
+]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.9", "seaborn>=0.13"]
+market = ["yfinance>=0.2.54"]
+calibration = ["pandas>=2.2", "xlrd>=2.0"]
+dev = [
+  "mypy>=1.14",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "ruff>=0.9",
+]
+
+[project.scripts]
+lifecycle-finance = "lifecycle_finance.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lifecycle_finance"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["lifecycle_finance"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["lifecycle_finance"]
+
+[[tool.mypy.overrides]]
+module = ["matplotlib", "matplotlib.*", "scipy", "scipy.*", "yfinance"]
+ignore_missing_imports = true
